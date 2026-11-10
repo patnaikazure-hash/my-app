@@ -1,0 +1,20 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- sunset -->
+    <path android:fillColor="#FFFF9E6B" android:pathData="M30,52 A24,24 0 0,1 78,52 Z" />
+    <!-- track bed -->
+    <path android:fillColor="#FF3A3040" android:pathData="M50,52 L58,52 L82,86 L26,86 Z" />
+    <!-- sleepers -->
+    <path android:fillColor="#FF8C7466" android:pathData="M30,80 L78,80 L80,84 L28,84 Z" />
+    <path android:fillColor="#FF8C7466" android:pathData="M36,70 L72,70 L73.5,73 L34.5,73 Z" />
+    <path android:fillColor="#FF8C7466" android:pathData="M41,62 L67,62 L68,64.5 L40,64.5 Z" />
+    <!-- rails -->
+    <path android:fillColor="#FFE6E9EF" android:pathData="M52,52 L53.4,52 L40,86 L36,86 Z" />
+    <path android:fillColor="#FFE6E9EF" android:pathData="M54.6,52 L56,52 L72,86 L68,86 Z" />
+    <!-- coin -->
+    <path android:fillColor="#FFE9A800" android:pathData="M54,26 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path android:fillColor="#FFFFD23F" android:pathData="M54,26 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+</vector>
