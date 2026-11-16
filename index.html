@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Firebase Checker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0a0a; color: #e0e0e0; font-family: system-ui, -apple-system, sans-serif; padding: 16px; min-height: 100vh; }
+  h1 { font-size: 1.3rem; color: #ff6b35; margin-bottom: 2px; }
+  .sub { font-size: 0.72rem; color: #555; margin-bottom: 18px; }
+  .card { background: #161616; border: 1px solid #252525; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  label { font-size: 0.72rem; color: #777; display: block; margin-bottom: 5px; }
+  textarea { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 7px; color: #ddd; font-size: 0.78rem; padding: 9px 10px; font-family: monospace; resize: vertical; margin-bottom: 10px; }
+  textarea:focus { outline: none; border-color: #ff6b35; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { border: none; border-radius: 7px; color: #fff; cursor: pointer; font-size: 0.8rem; font-weight: 600; padding: 9px 15px; transition: opacity 0.15s; }
+  button:active { opacity: 0.7; }
+  .btn-primary { background: #ff6b35; }
+  .btn-sec { background: #252525; color: #aaa; }
+
+  .progress-wrap { height: 3px; background: #1a1a1a; border-radius: 2px; margin-bottom: 14px; display: none; overflow: hidden; }
+  .progress-bar { height: 100%; background: #ff6b35; border-radius: 2px; transition: width 0.2s; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
+  .stat-box { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 10px; padding: 12px 10px; text-align: center; }
+  .stat-box .num { font-size: 1.8rem; font-weight: 800; line-height: 1; }
+  .stat-box .lbl { font-size: 0.6rem; color: #555; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.6px; }
+  .s-live .num   { color: #22c55e; }
+  .s-dead .num   { color: #ef4444; }
+  .s-total .num  { color: #f59e0b; }
+  .s-active .num { color: #818cf8; }
+
+  .active-bar-wrap { margin-bottom: 14px; }
+  .active-bar-label { display: flex; justify-content: space-between; font-size: 0.7rem; color: #555; margin-bottom: 5px; }
+  .active-bar-label span:last-child { color: #818cf8; font-weight: 600; }
+  .active-bar-bg { height: 8px; background: #1a1a1a; border-radius: 4px; overflow: hidden; }
+  .active-bar-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #818cf8); border-radius: 4px; transition: width 0.5s; }
+
+  .item { background: #0d0d0d; border-radius: 8px; padding: 11px 12px; margin-bottom: 7px; border-left: 3px solid #252525; }
+  .item.live     { border-left-color: #22c55e; }
+  .item.dead     { border-left-color: #ef4444; }
+  .item.error    { border-left-color: #f59e0b; }
+  .item.checking { border-left-color: #3b82f6; opacity: 0.75; }
+
+  .item-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 5px; }
+  .item-url { font-size: 0.7rem; color: #666; word-break: break-all; flex: 1; }
+
+  .badge { font-size: 0.6rem; font-weight: 700; padding: 2px 7px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; }
+  .badge.live     { background: #052e16; color: #22c55e; }
+  .badge.dead     { background: #450a0a; color: #ef4444; }
+  .badge.error    { background: #422006; color: #f59e0b; }
+  .badge.checking { background: #172554; color: #93c5fd; }
+  .badge.pending  { background: #1a1a1a; color: #555; }
+
+  .device-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 5px; }
+  .pill { font-size: 0.62rem; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+  .pill-total  { background: #1e1b4b; color: #818cf8; }
+  .pill-active { background: #052e16; color: #22c55e; }
+  .pill-idle   { background: #1c1917; color: #78716c; }
+
+  .item-detail { font-size: 0.68rem; color: #444; font-family: monospace; }
+  .item-paths  { font-size: 0.62rem; color: #2d2d2d; font-family: monospace; margin-top: 3px; }
+  .empty { text-align: center; color: #333; padding: 30px 0; font-size: 0.85rem; }
+  .section-title { font-size: 0.8rem; color: #888; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<h1>🔥 Firebase Checker</h1>
+<p class="sub">Liveness · Total Devices · Active Devices — Fast mode</p>
+
+<div class="card">
+  <label>Firebase URLs (one per line)</label>
+  <textarea id="urlInput" rows="5" placeholder="https://project-default-rtdb.firebaseio.com"></textarea>
+  <div class="btns">
+    <button class="btn-primary" onclick="startCheck()">▶ Check All</button>
+    <button class="btn-sec" onclick="clearAll()">✕ Clear</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">Summary</div>
+  <div class="summary-grid">
+    <div class="stat-box s-live">  <div class="num" id="cnt-live">0</div>   <div class="lbl">Live DBs</div>    </div>
+    <div class="stat-box s-dead">  <div class="num" id="cnt-dead">0</div>   <div class="lbl">Dead DBs</div>    </div>
+    <div class="stat-box s-total"> <div class="num" id="cnt-devices">0</div><div class="lbl">Total Devices</div></div>
+    <div class="stat-box s-active"><div class="num" id="cnt-active">0</div> <div class="lbl">Active Now</div>  </div>
+  </div>
+
+  <div class="active-bar-wrap" id="barWrap" style="display:none">
+    <div class="active-bar-label"><span>Active vs Total</span><span id="bar-pct">0%</span></div>
+    <div class="active-bar-bg"><div class="active-bar-fill" id="activeBar" style="width:0%"></div></div>
+  </div>
+
+  <div class="progress-wrap" id="pWrap">
+    <div class="progress-bar" id="pBar" style="width:0%"></div>
+  </div>
+
+  <div id="results"><div class="empty">Paste URLs above and tap Check All</div></div>
+</div>
+
+<script>
+let items = [];
+let running = false;
+
+// Active detection fields
+const ACTIVE_BOOL  = new Set(['online','isOnline','is_online','active','isActive','connected','isConnected','live','present','status']);
+const ACTIVE_TS    = ['lastSeen','last_seen','lastOnline','lastActive','last_active','updatedAt','updated_at','timestamp','ts','time','lastPing'];
+const ACTIVE_MS    = 10 * 60 * 1000; // 10 min window
+
+// Paths to try — ordered by likelihood
+const PATHS = ['devices','users','Devices','Users','device','user','online','connected','clients','tokens','panel','members','accounts','data','players','sessions','fcm'];
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function normalizeUrl(raw){
+  let u = raw.trim().replace(/\/+$/,'');
+  if(!u) return null;
+  if(!u.startsWith('http')) u = 'https://'+u;
+  return u;
+}
+
+// Single fetch with timeout
+async function get(url, ms=6000){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    clearTimeout(t);
+    return { status: r.status, text: await r.text() };
+  } catch(e){ clearTimeout(t); throw e; }
+}
+
+function countActive(data){
+  if(!data || typeof data !== 'object') return 0;
+  let active = 0;
+  const now = Date.now();
+  for(const dev of Object.values(data)){
+    if(!dev || typeof dev !== 'object') continue;
+    let isActive = false;
+
+    // Boolean flags
+    for(const f of ACTIVE_BOOL){
+      if(f in dev){
+        const v = dev[f];
+        if(v===true||v===1||v==='true'||v==='online'||v==='active'||v==='connected'||v==='1') { isActive=true; break; }
+      }
+    }
+
+    // Timestamp recency
+    if(!isActive){
+      for(const f of ACTIVE_TS){
+        if(f in dev){
+          let ts = dev[f];
+          if(typeof ts==='number'){
+            if(ts < 1e10) ts *= 1000; // seconds → ms
+            if(now - ts < ACTIVE_MS){ isActive=true; break; }
+          }
+        }
+      }
+    }
+
+    if(isActive) active++;
+  }
+  return active;
+}
+
+// FAST: fetch whole path at once, no per-device loops
+async function scanDevices(baseUrl){
+  // Step 1: get root keys (shallow, single request)
+  let rootKeys = [];
+  try {
+    const r = await get(baseUrl+'/.json?shallow=true', 5000);
+    if(r.status===200 && r.text && r.text!=='null' && !r.text.includes('"error"')){
+      const p = JSON.parse(r.text);
+      if(p && typeof p==='object') rootKeys = Object.keys(p);
+    }
+  } catch(e){}
+
+  const pathsToTry = [...new Set([...PATHS, ...rootKeys])];
+
+  // Step 2: fire ALL path fetches in parallel (shallow for count, full for active)
+  const shallowResults = await Promise.allSettled(
+    pathsToTry.map(path => get(baseUrl+'/'+path+'.json?shallow=true', 5000).then(r=>({path,r})))
+  );
+
+  // Find best path (most keys)
+  let bestPath='', bestKeys=[];
+  for(const res of shallowResults){
+    if(res.status!=='fulfilled') continue;
+    const {path, r} = res.value;
+    if(r.status!==200 || !r.text || r.text==='null' || r.text.includes('"error"')) continue;
+    try {
+      const p = JSON.parse(r.text);
+      if(!p || typeof p!=='object') continue;
+      const keys = Object.keys(p);
+      if(keys.length > bestKeys.length){ bestKeys=keys; bestPath=path; }
+    } catch(e){}
+  }
+
+  if(!bestPath || bestKeys.length===0) return { total:0, active:0, path:'', allPaths:[] };
+
+  const total = bestKeys.length;
+
+  // Step 3: fetch full data for best path in one shot (fast!)
+  // Limit to 500 devices to avoid huge payloads
+  let active = 0;
+  let sampled = false;
+
+  try {
+    // If small enough, fetch all at once
+    if(total <= 500){
+      const r = await get(baseUrl+'/'+bestPath+'.json', 8000);
+      if(r.status===200 && r.text && r.text!=='null'){
+        const data = JSON.parse(r.text);
+        active = countActive(data);
+      }
+    } else {
+      // Large DB: fetch first 200 keys using orderBy + limitToFirst
+      sampled = true;
+      const r = await get(
+        `${baseUrl}/${bestPath}.json?orderBy="$key"&limitToFirst=200`, 8000
+      );
+      if(r.status===200 && r.text && r.text!=='null'){
+        const data = JSON.parse(r.text);
+        const sampledActive = countActive(data);
+        const sampledTotal = Object.keys(data||{}).length;
+        // Extrapolate
+        active = sampledTotal > 0 ? Math.round((sampledActive/sampledTotal)*total) : 0;
+      }
+    }
+  } catch(e){}
+
+  return { total, active, path: bestPath, sampled, allPaths:[{path:bestPath, total, active}] };
+}
+
+async function checkOne(item){
+  item.status='checking'; item.detail='Connecting...'; item.total=0; item.active=0; item.devPath=''; item.allPaths=[];
+  render();
+
+  try {
+    const r = await get(item.url+'/.json?shallow=true');
+
+    if(r.status===200){
+      if(r.text.includes('"error"')){
+        const m = r.text.match(/"error"\s*:\s*"([^"]+)"/);
+        const msg = m?m[1]:'unknown';
+        if(/deactivat|disabl|retir/i.test(msg)){ item.status='dead'; item.detail=`Disabled: ${msg}`; }
+        else if(/permission/i.test(msg))        { item.status='live'; item.detail='Alive — rules deny read'; }
+        else                                     { item.status='error'; item.detail=`Error: ${msg}`; }
+      } else if(r.text.trim()==='null'){
+        item.status='live'; item.detail='Alive — DB empty';
+      } else {
+        item.status='live'; item.detail='Alive — scanning...'; render();
+        const s = await scanDevices(item.url);
+        item.total=s.total; item.active=s.active; item.devPath=s.path; item.allPaths=s.allPaths;
+        item.detail = s.total>0 ? `Alive — /${s.path}${s.sampled?' (sampled)':''}` : 'Alive — no readable device data';
+      }
+    } else if(r.status===401||r.status===403){
+      item.status='live'; item.detail=`HTTP ${r.status} — Alive, rules deny read`;
+    } else if(r.status===404){
+      item.status='dead'; item.detail='HTTP 404 — Deleted';
+    } else if(r.status===503){
+      item.status=r.text.includes('deactivat')?'dead':'error';
+      item.detail=r.text.includes('deactivat')?'Deactivated':'HTTP 503';
+    } else {
+      item.status='error'; item.detail=`HTTP ${r.status}`;
+    }
+  } catch(err){
+    item.status=err.name==='AbortError'?'dead':'error';
+    item.detail=err.name==='AbortError'?'Timeout — likely dead':`Error: ${err.message}`;
+  }
+  render();
+}
+
+async function startCheck(){
+  if(running) return;
+  items=[];
+  for(const line of document.getElementById('urlInput').value.split('\n')){
+    const url=normalizeUrl(line);
+    if(!url||items.find(i=>i.url===url)) continue;
+    items.push({url,status:'pending',detail:'Queued',total:0,active:0,devPath:'',allPaths:[]});
+  }
+  if(!items.length){ alert('Paste some URLs first'); return; }
+
+  running=true;
+  document.getElementById('pWrap').style.display='block';
+  render();
+
+  // Run ALL DBs in parallel — fast!
+  const total = items.length;
+  let done = 0;
+  await Promise.all(items.map(async item => {
+    await checkOne(item);
+    done++;
+    document.getElementById('pBar').style.width = (done/total*100)+'%';
+  }));
+
+  document.getElementById('pWrap').style.display='none';
+  running=false;
+  render();
+}
+
+function clearAll(){ items=[]; document.getElementById('urlInput').value=''; render(); }
+
+function render(){
+  const live    = items.filter(i=>i.status==='live').length;
+  const dead    = items.filter(i=>i.status==='dead').length;
+  const totalD  = items.reduce((s,i)=>s+(i.total||0),0);
+  const activeD = items.reduce((s,i)=>s+(i.active||0),0);
+
+  document.getElementById('cnt-live').textContent    = live;
+  document.getElementById('cnt-dead').textContent    = dead;
+  document.getElementById('cnt-devices').textContent = totalD;
+  document.getElementById('cnt-active').textContent  = activeD;
+
+  const bw = document.getElementById('barWrap');
+  if(totalD>0){
+    bw.style.display='block';
+    const pct = Math.round(activeD/totalD*100);
+    document.getElementById('activeBar').style.width = pct+'%';
+    document.getElementById('bar-pct').textContent   = `${activeD} / ${totalD} (${pct}%)`;
+  } else { bw.style.display='none'; }
+
+  const container = document.getElementById('results');
+  if(!items.length){ container.innerHTML='<div class="empty">Paste URLs above and tap Check All</div>'; return; }
+
+  const order={checking:0,live:1,error:2,dead:3,pending:4};
+  const sorted=[...items].sort((a,b)=>(order[a.status]??4)-(order[b.status]??4));
+
+  container.innerHTML = sorted.map(item => {
+    const name = item.url.replace('https://','').replace('-default-rtdb.firebaseio.com','');
+    const devRow = item.total>0 ? `
+      <div class="device-row">
+        <span class="pill pill-total">📱 ${item.total} total</span>
+        <span class="pill pill-active">🟢 ${item.active} active</span>
+        <span class="pill pill-idle">⚫ ${item.total-item.active} idle</span>
+      </div>` : '';
+    return `
+    <div class="item ${item.status}">
+      <div class="item-top">
+        <span class="item-url">${esc(name)}</span>
+        <span class="badge ${item.status}">${item.status}</span>
+      </div>
+      <div class="item-detail">${esc(item.detail)}</div>
+      ${devRow}
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('urlInput').value=`https://rajiv-662c1-default-rtdb.firebaseio.com
+https://rajkaro-faf26-default-rtdb.firebaseio.com
+https://roya-admin-default-rtdb.firebaseio.com
+https://rubbaajii-default-rtdb.firebaseio.com
+https://rajhgs-868e0-default-rtdb.firebaseio.com
+https://hacker-f75f0-default-rtdb.firebaseio.com
+https://nikki-panel-default-rtdb.firebaseio.com
+https://faltuinshan-default-rtdb.firebaseio.com
+https://subshsm-9280b-default-rtdb.firebaseio.com
+https://vuvhbjbi-default-rtdb.firebaseio.com
+https://e5turnament3-default-rtdb.firebaseio.com
+https://puja-admin-panel-30a82-default-rtdb.firebaseio.com
+https://meravala-34d7f-default-rtdb.firebaseio.com
+https://romydj-default-rtdb.firebaseio.com
+https://pinku-59a20-default-rtdb.firebaseio.com
+https://puja-b1618-default-rtdb.firebaseio.com
+https://remoo-f5ec1-default-rtdb.firebaseio.com
+https://sk-new-a7574-default-rtdb.firebaseio.com
+https://vzvxvz-default-rtdb.firebaseio.com
+https://bhokkodj54-default-rtdb.firebaseio.com`;
+render();
+</script>
+</body>
+</html>
