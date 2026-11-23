@@ -95,18 +95,22 @@ class MainActivity : AppCompatActivity() {
         s.javaScriptCanOpenWindowsAutomatically = false
 
         // Offscreen pre-raster: biggest native rendering win — raster off-screen tiles ahead of time
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.OFFSCREEN_PRE_RASTER)) {
-            WebSettingsCompat.setOffscreenPreRaster(s, true)
+        if (WebViewFeature.isFeatureSupported("OFFSCREEN_PRE_RASTER")) {
+            try { WebSettingsCompat.setOffscreenPreRaster(s, true) } catch (_: Throwable) {}
         }
         // Safe browsing adds latency to every fetch — disable for offline-asset app
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
-            WebSettingsCompat.setSafeBrowsingEnabled(s, false)
-        }
+        try {
+            if (WebViewFeature.isFeatureSupported("SAFE_BROWSING_ENABLE")) {
+                WebSettingsCompat.setSafeBrowsingEnabled(s, false)
+            }
+        } catch (_: Throwable) {}
         // Dark mode follows system
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
-            @Suppress("DEPRECATION")
-            WebSettingsCompat.setForceDark(s, WebSettingsCompat.FORCE_DARK_AUTO)
-        }
+        try {
+            if (WebViewFeature.isFeatureSupported("FORCE_DARK")) {
+                @Suppress("DEPRECATION")
+                WebSettingsCompat.setForceDark(s, WebSettingsCompat.FORCE_DARK_AUTO)
+            }
+        } catch (_: Throwable) {}
 
         // THE key always-alive flag: keep renderer bound at IMPORTANT priority AND don't waive
         // when the WebView is briefly off-screen (notification shade, orientation change, etc.)
@@ -121,8 +125,8 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
 
-        // chrome://inspect debugging from a tethered PC
-        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        // chrome://inspect debugging from a tethered PC (always on for sideloaded debug APK)
+        WebView.setWebContentsDebuggingEnabled(true)
 
         wv.webViewClient = object : WebViewClientCompat() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
