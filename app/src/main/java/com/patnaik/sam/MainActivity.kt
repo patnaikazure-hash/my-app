@@ -9,11 +9,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
-import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
@@ -27,10 +28,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.WebSettingsCompat
-import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewFeature
 
 class MainActivity : AppCompatActivity() {
@@ -40,25 +40,21 @@ class MainActivity : AppCompatActivity() {
     private var crashCount = 0
     private val MAX_CRASHES = 3
 
-    private val notifPermLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* ignore — FGS still runs without POST_NOTIFICATIONS */ }
-
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
-        // Keep screen on while the activity is visible
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         container = findViewById(R.id.web_container)
 
-        requestNotificationPermissionIfNeeded()
-        promptBatteryOptimizationExemption()
-        startPollerService()
+        // Build WebView FIRST — no auto permission prompts, no auto service start.
+        // Everything that could crash on startup runs AFTER the panel is visible.
         buildAndInflateWebView(savedInstanceState)
-        maybePromptOemAutoStart()
+
+        // Defer all setup prompts by 5 seconds so the panel is visible first
+        Handler(Looper.getMainLooper()).postDelayed({
+            try { startPollerService() } catch (t: Throwable) { Log.w("SAM", "poller start failed: ${t.message}") }
+        }, 5000)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -72,137 +68,100 @@ class MainActivity : AppCompatActivity() {
         container.addView(wv)
 
         val s = wv.settings
-        // Core
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
         s.databaseEnabled = true
         s.cacheMode = WebSettings.LOAD_DEFAULT
-        // Viewport
         s.useWideViewPort = true
         s.loadWithOverviewMode = true
         s.builtInZoomControls = false
         s.displayZoomControls = false
         s.setSupportZoom(false)
-        // Media
         s.mediaPlaybackRequiresUserGesture = false
-        // Network
         s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        // File access (we load from android_asset so allow the minimal set)
         s.allowFileAccess = true
         s.allowContentAccess = true
         s.textZoom = 100
         s.loadsImagesAutomatically = true
         s.javaScriptCanOpenWindowsAutomatically = false
 
-        // Offscreen pre-raster: biggest native rendering win — raster off-screen tiles ahead of time
-        if (WebViewFeature.isFeatureSupported("OFFSCREEN_PRE_RASTER")) {
-            try { WebSettingsCompat.setOffscreenPreRaster(s, true) } catch (_: Throwable) {}
-        }
-        // Safe browsing adds latency to every fetch — disable for offline-asset app
+        // Offscreen pre-raster — biggest native rendering win
         try {
-            if (WebViewFeature.isFeatureSupported("SAFE_BROWSING_ENABLE")) {
-                WebSettingsCompat.setSafeBrowsingEnabled(s, false)
-            }
-        } catch (_: Throwable) {}
-        // Dark mode follows system
-        try {
-            if (WebViewFeature.isFeatureSupported("FORCE_DARK")) {
-                @Suppress("DEPRECATION")
-                WebSettingsCompat.setForceDark(s, WebSettingsCompat.FORCE_DARK_AUTO)
+            if (WebViewFeature.isFeatureSupported("OFFSCREEN_PRE_RASTER")) {
+                WebSettingsCompat.setOffscreenPreRaster(s, true)
             }
         } catch (_: Throwable) {}
 
-        // THE key always-alive flag: keep renderer bound at IMPORTANT priority AND don't waive
-        // when the WebView is briefly off-screen (notification shade, orientation change, etc.)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            wv.setRendererPriorityPolicy(
-                WebView.RENDERER_PRIORITY_IMPORTANT,
-                /* waivedWhenNotVisible = */ false
-            )
-        }
+        // Keep renderer bound at IMPORTANT priority even when briefly off-screen
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                wv.setRendererPriorityPolicy(
+                    WebView.RENDERER_PRIORITY_IMPORTANT,
+                    /* waivedWhenNotVisible = */ false
+                )
+            }
+        } catch (_: Throwable) {}
 
-        // Cookies for Firebase auth flows
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
-
-        // chrome://inspect debugging from a tethered PC (always on for sideloaded debug APK)
         WebView.setWebContentsDebuggingEnabled(true)
 
-        wv.webViewClient = object : WebViewClientCompat() {
-            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
-                // Keep all nav inside the WebView
-                return false
-            }
+        wv.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean = false
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                // Inject lifecycle hooks the native onTrimMemory() bridge calls into.
-                // The SPA doesn't need to define window.app itself — it's safe to override here
-                // because the SPA uses its own internal state objects.
+                // Inject lifecycle hooks the native onTrimMemory() bridge calls
                 val bootstrapJs = """
                     (function(){
                       if (!window.app) window.app = {};
                       window.app.onLowMemory = function(level) {
                         try {
                           console.log('[SAM-Native] onLowMemory level=' + level);
-                          // Force a V8 GC pass via performance.measureUserAgentSpecificMemory if available
                           if (performance.measureUserAgentSpecificMemory) {
                             performance.measureUserAgentSpecificMemory().catch(function(){});
                           }
-                          // Give caches a chance to shrink — SMS cache + inflight fetch map
                           try { if (typeof smsAnalysisCache !== 'undefined' && smsAnalysisCache.clear) smsAnalysisCache.clear(); } catch(e){}
                           try { if (typeof _inflightFetch !== 'undefined' && _inflightFetch.clear) _inflightFetch.clear(); } catch(e){}
                         } catch(e) {}
                       };
-                      window.app.onUiHidden = function() {
-                        try { console.log('[SAM-Native] UI hidden'); } catch(e) {}
+                      window.app.onUiHidden = function() { try { console.log('[SAM-Native] UI hidden'); } catch(e) {} };
+                      // Expose native helpers to a small settings UI inside the panel if it wants them
+                      window.app.openSettings = function(what) {
+                        try { SAMNative && SAMNative.openSettings && SAMNative.openSettings(what); } catch(e){}
                       };
-                      // Hard pause the polling loop when tab goes to background
-                      document.addEventListener('visibilitychange', function(){
-                        try {
-                          if (window.SAMNative && window.SAMNative.log) {
-                            window.SAMNative.log('visibility=' + document.visibilityState);
-                          }
-                        } catch(e){}
-                      });
                     })();
                 """.trimIndent()
-                view.evaluateJavascript(bootstrapJs, null)
+                try { view.evaluateJavascript(bootstrapJs, null) } catch (_: Throwable) {}
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 val didCrash = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && detail.didCrash()
-                Log.e("SAM-WV", if (didCrash) "Renderer process CRASHED" else "System killed renderer for memory reclaim")
-
-                // Rebuild WebView — MUST remove + destroy the dead one first
+                Log.e("SAM-WV", if (didCrash) "Renderer CRASHED" else "System killed renderer for memory reclaim")
                 (view.parent as? ViewGroup)?.removeView(view)
                 try { view.destroy() } catch (_: Throwable) {}
                 webView = null
-
                 if (crashCount < MAX_CRASHES) {
                     crashCount++
                     container.post { buildAndInflateWebView(null) }
                 } else {
                     Toast.makeText(
                         this@MainActivity,
-                        "App crashed $crashCount times. Please force-stop and reopen.",
+                        "App restarted $crashCount times. Force-stop and reopen to reset.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
-                return true  // CRITICAL: returning false here crashes the whole app
+                return true  // MUST return true or the whole app dies
             }
         }
 
         wv.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                msg?.let {
-                    Log.d("SAM-JS", "[${it.messageLevel()}] ${it.message()} @${it.sourceId()}:${it.lineNumber()}")
-                }
+                msg?.let { Log.d("SAM-JS", "[${it.messageLevel()}] ${it.message()} @${it.sourceId()}:${it.lineNumber()}") }
                 return true
             }
         }
 
-        // Download handler
         wv.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
             try {
                 val req = DownloadManager.Request(Uri.parse(url))
@@ -219,8 +178,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Native <-> JS bridge for memory/visibility events
-        wv.addJavascriptInterface(SamBridge(), "SAMNative")
+        wv.addJavascriptInterface(SamBridge(this), "SAMNative")
 
         if (savedInstanceState != null) {
             wv.restoreState(savedInstanceState)
@@ -229,8 +187,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Bridge Android lifecycle memory warnings into the JS layer so the SPA can shrink its caches
-    // BEFORE the Low Memory Killer gets to us. WebView.freeMemory() is deprecated and a no-op.
+    // Bridge Android lifecycle memory warnings into the JS layer
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         val js = when {
@@ -240,31 +197,23 @@ class MainActivity : AppCompatActivity() {
                 "try{window.app&&window.app.onUiHidden&&window.app.onUiHidden()}catch(e){}"
             else -> null
         }
-        js?.let { webView?.evaluateJavascript(it, null) }
+        js?.let { try { webView?.evaluateJavascript(it, null) } catch (_: Throwable) {} }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        webView?.saveState(outState)
+        try { webView?.saveState(outState) } catch (_: Throwable) {}
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && webView?.canGoBack() == true) {
-            webView?.goBack()
-            return true
+            webView?.goBack(); return true
         }
         return super.onKeyDown(keyCode, event)
     }
 
-    override fun onPause() {
-        super.onPause()
-        webView?.onPause()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        webView?.onResume()
-    }
+    override fun onPause() { super.onPause(); try { webView?.onPause() } catch (_: Throwable) {} }
+    override fun onResume() { super.onResume(); try { webView?.onResume() } catch (_: Throwable) {} }
 
     override fun onDestroy() {
         webView?.let { wv ->
@@ -279,9 +228,28 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notifPermLauncher.launch("android.permission.POST_NOTIFICATIONS")
+    private fun startPollerService() {
+        val i = Intent(this, FirebasePollerService::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(i)
+            } else {
+                startService(i)
+            }
+        } catch (t: Throwable) { Log.w("SAM", "startPollerService failed: ${t.message}") }
+    }
+
+    // Public API called from JS via SamBridge.openSettings
+    fun openSettingsScreen(what: String) {
+        runOnUiThread {
+            try {
+                when (what) {
+                    "battery" -> promptBatteryOptimizationExemption()
+                    "autostart" -> OemAutoStart.open(this)
+                    "battery-info" -> showOemHelpDialog()
+                    else -> {}
+                }
+            } catch (t: Throwable) { Log.w("SAM", "openSettings failed: ${t.message}") }
         }
     }
 
@@ -295,51 +263,26 @@ class MainActivity : AppCompatActivity() {
                         .setData(Uri.parse("package:$packageName"))
                     startActivity(i)
                 } catch (_: Exception) {
-                    try {
-                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                    } catch (_: Exception) {}
+                    try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                    catch (_: Exception) {}
                 }
+            } else {
+                Toast.makeText(this, "Already exempted from battery optimization", Toast.LENGTH_SHORT).show()
             }
         } catch (_: Throwable) {}
     }
 
-    private fun startPollerService() {
-        try {
-            val i = Intent(this, FirebasePollerService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(i)
-            } else {
-                startService(i)
-            }
-        } catch (t: Throwable) {
-            Log.w("SAM", "startPollerService failed: ${t.message}")
-        }
-    }
-
-    private fun maybePromptOemAutoStart() {
-        // Only prompt once ever — persisted in SharedPreferences
-        val prefs = getSharedPreferences("sam_app", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("oem_autostart_prompted", false)) return
+    private fun showOemHelpDialog() {
         val oem = (Build.MANUFACTURER ?: "").lowercase()
-        if (OemAutoStart.needsPrompt(oem)) {
-            // Show a dialog after a short delay so the user sees the panel first
-            container.postDelayed({
-                try {
-                    val msg = OemAutoStart.messageFor(oem)
-                    androidx.appcompat.app.AlertDialog.Builder(this)
-                        .setTitle("Keep SAM Panel running")
-                        .setMessage(msg)
-                        .setPositiveButton("Open Settings") { _, _ ->
-                            OemAutoStart.open(this)
-                        }
-                        .setNegativeButton("Skip") { _, _ -> }
-                        .setCancelable(true)
-                        .show()
-                    prefs.edit().putBoolean("oem_autostart_prompted", true).apply()
-                } catch (_: Throwable) {}
-            }, 3000)
-        } else {
-            prefs.edit().putBoolean("oem_autostart_prompted", true).apply()
-        }
+        val msg = OemAutoStart.messageFor(oem)
+        try {
+            AlertDialog.Builder(this)
+                .setTitle("Keep SAM Panel running")
+                .setMessage(msg)
+                .setPositiveButton("Open OEM Settings") { _, _ -> try { OemAutoStart.open(this) } catch (_: Throwable) {} }
+                .setNegativeButton("Close", null)
+                .setCancelable(true)
+                .show()
+        } catch (_: Throwable) {}
     }
 }

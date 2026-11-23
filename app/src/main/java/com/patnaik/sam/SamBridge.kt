@@ -2,20 +2,20 @@ package com.patnaik.sam
 
 import android.util.Log
 import android.webkit.JavascriptInterface
+import java.lang.ref.WeakReference
 
-/**
- * Minimal JS <-> Kotlin bridge. Exposed to JS as window.SAMNative.
- * KEEP IT TINY — @JavascriptInterface calls are synchronous and can block the renderer
- * if they do real work. Only fire-and-forget methods here.
- */
-class SamBridge {
-    @JavascriptInterface
-    fun log(msg: String) {
-        Log.i("SAM-JS", msg)
-    }
+class SamBridge(activity: MainActivity) {
+    private val actRef = WeakReference(activity)
 
     @JavascriptInterface
-    fun markAlive(ts: Long) {
-        // Heartbeat hook — could be wired to a watchdog in future
+    fun log(msg: String) { Log.i("SAM-JS", msg) }
+
+    @JavascriptInterface
+    fun markAlive(ts: Long) {}
+
+    // JS can call: SAMNative.openSettings("battery"|"autostart"|"battery-info")
+    @JavascriptInterface
+    fun openSettings(what: String) {
+        actRef.get()?.openSettingsScreen(what ?: "battery")
     }
 }
