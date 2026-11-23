@@ -93,16 +93,9 @@ class FirebasePollerService : Service() {
         wakeLock = null
     }
 
-    /**
-     * Android 15 (API 35+) calls this when dataSync hits the 6-hour/24-hour cap.
-     * We target 34 so this currently doesn't fire, but having it stops a future upgrade from
-     * throwing RemoteServiceException. Must stop within "a few seconds".
-     */
-    override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.w("SAM-FGS", "dataSync timeout reached — releasing and stopping")
-        releaseWakeLockSafely()
-        stopSelf()
-    }
+    // Note: onTimeout(startId, fgsType) exists in API 35+ for the dataSync 6h cap.
+    // We target SDK 34 so the cap doesn't apply — no override needed here. If the project
+    // ever moves to targetSdk=35, re-add the override to release wake lock + stopSelf gracefully.
 
     override fun onDestroy() {
         releaseWakeLockSafely()
