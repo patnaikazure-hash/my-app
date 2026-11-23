@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
         s.displayZoomControls = false
         s.setSupportZoom(true)
         s.useWideViewPort = true
-        s.loadWithOverviewPort = true
+        s.loadWithOverviewMode = true
         // Media
         s.mediaPlaybackRequiresUserGesture = false
         // Mixed content (Firebase REST is https anyway, but just in case)
