@@ -1,0 +1,66 @@
+name: Build SAM Panel APK
+
+on:
+  push:
+    branches: [main, master, sam-android]
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version=8.9
+
+      - name: Grant execute permission to gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload Debug APK (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAM-Panel-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 90
+
+      - name: Create / update Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sam-android-latest
+          name: SAM Panel APK (latest build)
+          body: |
+            Latest SAM Panel APK built from the `sam-android` branch.
+            Install on your phone directly. If install is blocked, enable
+            "Install unknown apps" for your browser / file manager.
+          files: app/build/outputs/apk/debug/app-debug.apk
+          prerelease: false
+          make_latest: 'true'
+          token: ${{ secrets.GITHUB_TOKEN }}

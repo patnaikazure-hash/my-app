@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Emerald "S" for SAM Panel -->
+    <path
+        android:pathData="M54,30 L54,30 Q38,30 38,44 Q38,54 50,56 L58,58 Q66,60 66,66 Q66,74 54,74 Q42,74 42,66"
+        android:strokeColor="#10b981"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,22 L54,30 M54,74 L54,82"
+        android:strokeColor="#10b981"
+        android:strokeWidth="6"
+        android:strokeLineCap="round" />
+</vector>
