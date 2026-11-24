@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import android.util.Log
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -55,6 +56,12 @@ class MainActivity : AppCompatActivity() {
         Handler(Looper.getMainLooper()).postDelayed({
             try { startPollerService() } catch (t: Throwable) { Log.w("SAM", "poller start failed: ${t.message}") }
         }, 5000)
+
+        // Kick off auto-update checks 8 seconds after launch — HTML applies silently,
+        // APK will prompt the OS installer on new releases.
+        Handler(Looper.getMainLooper()).postDelayed({
+            try { kickOffAutoUpdateChecks() } catch (t: Throwable) { Log.w("SAM", "update check failed: ${t.message}") }
+        }, 8000)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -183,8 +190,71 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState != null) {
             wv.restoreState(savedInstanceState)
         } else {
-            wv.loadUrl("file:///android_asset/index.html")
+            wv.loadUrl(PanelUpdater.currentLoadUrl(this))
         }
+    }
+
+    // ─── Auto-updater: silent HTML hot-swap + one-tap APK installer ───
+    private fun kickOffAutoUpdateChecks() {
+        Thread {
+            // 1. Check for HTML panel update (silent, auto-apply)
+            try {
+                val htmlResult = PanelUpdater.checkAndDownloadHtmlUpdate(this)
+                if (htmlResult.updated) {
+                    runOnUiThread {
+                        Toast.makeText(this, "🔄 Panel updated — reloading", Toast.LENGTH_SHORT).show()
+                        webView?.loadUrl(PanelUpdater.currentLoadUrl(this))
+                    }
+                }
+            } catch (t: Throwable) { Log.w("SAM-Update", "html check failed: ${t.message}") }
+            // 2. Check for APK update (one-tap install)
+            try {
+                checkApkUpdateAndMaybeInstall()
+            } catch (t: Throwable) { Log.w("SAM-Update", "apk check failed: ${t.message}") }
+        }.start()
+    }
+
+    private fun checkApkUpdateAndMaybeInstall() {
+        val info = PanelUpdater.checkApkVersion() ?: return
+        // Only prompt for a real APK update once per published release
+        val prefs = getSharedPreferences("sam_app", Context.MODE_PRIVATE)
+        val lastSeenPublish = prefs.getString("apk_last_seen_publish", "") ?: ""
+        if (info.publishedAt == lastSeenPublish) return // already offered this one
+        // Also skip if downloaded APK matches current size (likely same build)
+        val installedCode = try {
+            packageManager.getPackageInfo(packageName, 0).let {
+                @Suppress("DEPRECATION") it.versionCode.toLong()
+            }
+        } catch (_: Throwable) { 0L }
+        Log.i("SAM-Update", "APK release published ${info.publishedAt}, installedCode=$installedCode, size=${info.sizeBytes}")
+        // Download in background
+        val apk = PanelUpdater.downloadApk(this, info.downloadUrl) { done, total ->
+            Log.d("SAM-Update", "APK download $done / $total")
+        } ?: return
+        // Remember we've seen this one (even if user dismisses, don't nag again)
+        prefs.edit().putString("apk_last_seen_publish", info.publishedAt).apply()
+        runOnUiThread { promptApkInstall(apk) }
+    }
+
+    private fun promptApkInstall(apk: java.io.File) {
+        try {
+            val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", apk)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Toast.makeText(this, "New APK ready — tap Install to update", Toast.LENGTH_LONG).show()
+        } catch (t: Throwable) {
+            Log.w("SAM-Update", "install prompt failed", t)
+            Toast.makeText(this, "Update downloaded but couldn't open installer: ${t.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun triggerManualUpdateCheck() {
+        Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
+        kickOffAutoUpdateChecks()
     }
 
     // Bridge Android lifecycle memory warnings into the JS layer

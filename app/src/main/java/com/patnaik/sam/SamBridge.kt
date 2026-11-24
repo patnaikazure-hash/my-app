@@ -18,4 +18,12 @@ class SamBridge(activity: MainActivity) {
     fun openSettings(what: String) {
         actRef.get()?.openSettingsScreen(what ?: "battery")
     }
+
+    // JS can call: SAMNative.checkForUpdates() to manually fetch latest panel + APK
+    @JavascriptInterface
+    fun checkForUpdates() {
+        actRef.get()?.runOnUiThread {
+            actRef.get()?.triggerManualUpdateCheck()
+        }
+    }
 }
