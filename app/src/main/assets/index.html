@@ -18998,6 +18998,120 @@ if (typeof window !== "undefined" && !window._smsCacheCleanupStarted) {
         }
     }, 5 * 60 * 1000);
 }
+
+// ─────────────────────────────────────────────────────────────
+// ZERO-LOSS CURSOR-DRAIN LOOP (replaces limitToLast=100 truncation)
+// Firebase push-IDs encode timestamp in first 8 chars using this alphabet.
+// orderBy=$key + startAt=<cursor> + limitToFirst=N, looped until drained,
+// gives us "every SMS since last scan, with no silent drops at burst".
+// ─────────────────────────────────────────────────────────────
+const _PUSH_CHARS = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
+function pushIdBoundFromMs(ms) {
+    const out = new Array(8);
+    for (let i = 7; i >= 0; i--) { out[i] = _PUSH_CHARS[ms % 64]; ms = Math.floor(ms / 64); }
+    return out.join('');
+}
+// Cursor store — persisted to localStorage so cursors survive app restart.
+// Shape: { [cacheKey]: lastSeenPushId }
+const _smsCursors = (() => {
+    try { return new Map(Object.entries(JSON.parse(localStorage.getItem("sam_sms_cursors") || "{}"))); }
+    catch { return new Map(); }
+})();
+let _cursorSaveQueued = false;
+function _queueCursorSave() {
+    if (_cursorSaveQueued) return;
+    _cursorSaveQueued = true;
+    setTimeout(() => {
+        try {
+            const obj = {};
+            for (const [k, v] of _smsCursors) obj[k] = v;
+            localStorage.setItem("sam_sms_cursors", JSON.stringify(obj));
+        } catch (_) {}
+        _cursorSaveQueued = false;
+    }, 2000);
+}
+function getCursor(cacheKey) { return _smsCursors.get(cacheKey) || null; }
+function setCursor(cacheKey, pushId) {
+    if (!pushId) return;
+    _smsCursors.set(cacheKey, pushId);
+    _queueCursorSave();
+}
+// Cap cursor map at 10k entries
+function _trimCursors() {
+    if (_smsCursors.size < 10000) return;
+    const toEvict = Math.ceil(_smsCursors.size * 0.2);
+    const iter = _smsCursors.keys();
+    for (let i = 0; i < toEvict; i++) {
+        const k = iter.next().value;
+        if (k !== undefined) _smsCursors.delete(k);
+    }
+    _queueCursorSave();
+}
+setInterval(_trimCursors, 10 * 60 * 1000);
+
+/**
+ * Drain all SMS past `cursor` (or past last 48h if no cursor).
+ * Returns the raw Firebase object merged from all pages.
+ */
+async function drainMessagesSince(sourceUrl, sourceKey, deviceId, cursor) {
+    const DRAIN_BATCH = 500;
+    const OVERLAP_MS = 30000;        // 30s overlap for clock skew / late writes
+    const MAX_PAGES = 20;            // worst-case 10,000 SMS/device
+    const FIRST_RUN_LOOKBACK_MS = 48 * 60 * 60 * 1000;  // 48h cold start
+
+    const now = Date.now();
+    // Decide starting point
+    let scanStart;
+    if (cursor && typeof cursor === "string" && cursor.length >= 8) {
+        // Use cursor but pull back by overlap window as safety net
+        const cursorMs = _msFromPushId(cursor);
+        const safeStart = Number.isFinite(cursorMs)
+            ? pushIdBoundFromMs(Math.max(0, cursorMs - OVERLAP_MS))
+            : cursor;
+        scanStart = safeStart;
+    } else {
+        // Cold start — go back 48h
+        scanStart = pushIdBoundFromMs(now - FIRST_RUN_LOOKBACK_MS);
+    }
+
+    const merged = {};
+    let lastSeenKey = null;
+    let totalRows = 0;
+    for (let page = 0; page < MAX_PAGES; page++) {
+        const resp = await yn(sourceUrl, sourceKey, `messages/${deviceId}`, {
+            orderBy: '"$key"',
+            startAt: `"${scanStart}"`,
+            limitToFirst: String(DRAIN_BATCH)
+        });
+        if (!resp || typeof resp !== "object") break;
+        const keys = Object.keys(resp);
+        if (keys.length === 0) break;
+        // Sort keys since Firebase REST filtered responses are unordered
+        keys.sort();
+        // startAt is INCLUSIVE — on pages 2+ the first row equals scanStart, skip it
+        let startIdx = 0;
+        if (page > 0 && keys[0] === scanStart) startIdx = 1;
+        for (let i = startIdx; i < keys.length; i++) {
+            const k = keys[i];
+            merged[k] = resp[k];
+            lastSeenKey = k;
+            totalRows++;
+        }
+        if (keys.length < DRAIN_BATCH) break;  // short page = we've drained
+        scanStart = keys[keys.length - 1];     // next page starts from last key
+    }
+    return { messages: merged, lastKey: lastSeenKey, totalRows };
+}
+
+function _msFromPushId(id) {
+    let ms = 0;
+    for (let i = 0; i < 8; i++) {
+        const idx = _PUSH_CHARS.indexOf(id[i]);
+        if (idx < 0) return NaN;
+        ms = ms * 64 + idx;
+    }
+    return ms;
+}
 // ─────────────────────────────────────────────────────────────
 // Firebase REST client — coalescing, concurrency gate, jitter backoff
 // ─────────────────────────────────────────────────────────────
@@ -19450,6 +19564,48 @@ const Vp = [
     Fp = [/CVV[\s:]+([0-9]{3,4})/i, /(?:cvv|cvc|security\s+code)[\s:]+([0-9]{3,4})/i],
     Ip = [/(?:expiry|exp|valid\s+thru?|valid\s+till)[\s:]+([0-9]{1,2}\/[0-9]{2,4})/i, /([0-9]{1,2})\/([0-9]{2,4})\s+(?:expiry|exp)/i];
 
+// ─────────────────────────────────────────────────────────────
+// BRANCH-FIRST DETECTORS — run before generic debit/credit path
+// Research corpus: HDFC/Kotak/SBI emit amounts with `.00.00` double-decimal bug,
+// Standing Instruction/UPI Mandate/ECS/ACH don't contain "debited" keyword,
+// CC statements aren't transactions, FD/RD have their own schema.
+// ─────────────────────────────────────────────────────────────
+
+// Mandate / Standing Instruction / ACH / eNACH / Auto-debit — NO "debited" keyword
+const _RE_MANDATE = /(?:UPI\s*Mandate[:\s]*(?:Sent|Debited|Auto[\s-]*Debit)|Standing\s*Instruction\s+(?:set|executed|debited|registered)|(?:ECS|ACH|NACH|eNACH|NEFT|RTGS)\s*(?:Dr|debit|presented|executed|returned)|Auto[\s-]*debit(?:\s+of)?|e[\s-]*mandate\s+(?:registered|executed|debited|modified)|SI\s+(?:debit|executed|setup))/i;
+
+// EMI (tolerates HDFC .00.00 double-decimal bug)
+const _RE_EMI = /\bEMI\s*(?:of)?\s*(?:Rs\.?|INR|₹)?\s*([0-9,]+(?:\.[0-9]{1,2}){0,2})\s*(?:debited|deducted|paid|collected)/i;
+
+// Credit card statement (not a transaction)
+const _RE_STATEMENT = /(?:credit\s*card)?\s*statement\s*(?:is\s*)?(?:ready|generated)/i;
+
+// FD / RD events
+const _RE_FD_RD = /\b(?:FD\s*(?:no|number|A\/?c)?\s*\d*.*?(?:matured|renewed|closed|booked|created|auto[\s-]*renewed)|Recurring\s*Deposit.*?(?:installment|deducted|credited|matured)|(?:maturity\s*amount|matured\s*value)\b|Interest\s*(?:of\s*)?(?:Rs\.?|INR|₹)?\s*[0-9,]+\s*credited.*?FD)/i;
+
+// International remittance
+const _RE_INTL = /International\s*(?:txn|transaction|credit|debit)\s*[:\s]*(USD|EUR|GBP|AED|SGD|AUD|CAD|JPY|\$|€|£)\s*([0-9,]+(?:\.[0-9]{1,2}){0,2})/i;
+
+// Wallet top-up (bank sends, wallet named in body)
+const _RE_WALLET = /(?:Rs\.?|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+added\s+to\s+(CRED|PhonePe|Paytm|MobiKwik|Amazon\s*Pay|PayZapp|Airtel\s*Money|Jio\s*Money|Freecharge|Mobikwik|Ola\s*Money)\s+wallet/i;
+
+// Hindi / Tamil overlay — Unicode-aware
+const _RE_HINDI_DEBIT  = /(?:डेबिट|निकासी|कटौती|काटा\s*गया|भुगतान\s*किया|स्थानांतरित)/;
+const _RE_HINDI_CREDIT = /(?:जमा|क्रेडिट|प्राप्त\s*हुआ|मिला|जमा\s*हुआ)/;
+const _RE_TAMIL_DEBIT  = /(?:செலவு|பற்று)/;
+const _RE_TAMIL_CREDIT = /(?:வரவு)/;
+
+// Normalize amount with .00.00 bug tolerance + comma stripping
+function _normAmount(raw) {
+    if (raw == null) return null;
+    let s = String(raw).replace(/,/g, '');
+    // HDFC/Kotak/SBI bug: "9063.00.00" → "9063.00"
+    const m = /^(\d+)\.(\d{1,2})\.(\d{1,2})$/.exec(s);
+    if (m) s = `${m[1]}.${m[2]}`;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+}
+
 function Wp(A) {
     if (!A) return null;
     const tt = A.toUpperCase();
@@ -19604,6 +19760,28 @@ const KNOWN_BANK_HEADERS = new Set([
     'HDFCLF','ICIPRU','SBILFE','MAXBPA','STARHL','GODIGT','ACKOIN','LICIND',
     // Foreign
     'CITIIN','HSBCIN','DBSIND','STNDCH','SCBIND','DEUBK','BARCIN','BOFAML','JPMCIN',
+    // ─── Fintech sponsor-bank body codes (crucial — many fintechs ride these) ───
+    // Jupiter rides on Axis; CRED top-ups come from user's bank; Niyo on Equitas/SBM; slice on RBL/SBM
+    'JUPITR','JUPMNY','JUPBNK','FIBANK','FIMONY','FEDFI',
+    'NIYOIN','NIYOBK','SBMBNK','EQUITAS','EQBANK',
+    'SLICEB','SLICEP','SLCPAY','SLICEIT',
+    'CREDIN','CREDPR','CREDPAY','CRED',
+    'UNICRD','UNICAR','ONECRD','ONECD',
+    'SIMPLB','POSTPE','ZEPPAY','ZEPTO','BLKCRD','BLINKIT',
+    'FREODB','FREOCR','FREOSV','KIWICR','KIWI',
+    // ─── NBFC / lender body codes ───
+    'BAJAJF','BAJFIN','BFLEMI','BFLFIN',
+    'MONEYT','MNYTAP','STASHF','STASHFIN',
+    'LAZYPY','LAZYPAY','KREDIT','KRDTBE','KREDITBE','KISSHT',
+    'NAVICR','NAVISH','MPOKKT','CASHEE','DMIFIN','HMFIN',
+    'TATACP','PIRAMAL','MUTHOOT','MANAPPR','SHRIRM','CHOLAM','MAHLBX',
+    'ABFL','ABSLI',
+    // ─── Payments banks (more variants) ───
+    'FINOBK','AIRPMT','JIOPAY','PYTMPB','PYTMBK','AIRTPB',
+    // ─── Variants / other ───
+    'AMEXEP','MYAMEX','XXAMEX','PAYZAP','PAYU','RAZORP','CASHFR','BILLDS',
+    // Short-form variants (3-5 char) — DLT allows body 3-9 chars for some senders
+    'PNB','SBI','BOI','BOB','IOB','RBL','DBS','CRED','KIWI','NAVI','SLICE',
 ]);
 
 // ─────────────────────────────────────────────────────────────
@@ -19756,8 +19934,9 @@ function e1(A, tt) {
     for (const v of Vp) {
         const E = A.match(v);
         if (E && E[1]) {
-            const g = E[1].replace(/,/g, "");
-            if (parseFloat(g) >= 0) { f = g; break }
+            // Normalize with .00.00 tolerance (HDFC/Kotak/SBI double-decimal bug)
+            const n = _normAmount(E[1]);
+            if (n != null && n >= 0) { f = String(n); break }
         }
     }
     // Need either balance, OTP, or transaction ref to be useful
@@ -19768,12 +19947,22 @@ function e1(A, tt) {
     for (const v of Qp) {
         const E = A.match(v);
         if (E && E[1]) {
-            const g = E[1].replace(/,/g, "");
-            if (g !== f) { o = g; break }
+            const n = _normAmount(E[1]);
+            if (n != null && String(n) !== f) { o = String(n); break }
         }
     }
+    // Branch-first detection — catches templates that don't contain "debited"/"credited"
     let x;
-    /credit(?:ed)?/i.test(A) ? x = "credit" : /debit(?:ed)?|withdraw|paid|purchase|spent/i.test(A) ? x = "debit" : otpCode && (x = "otp");
+    let txnSubtype = null;
+    if (_RE_MANDATE.test(A)) { x = "debit"; txnSubtype = "mandate"; }
+    else if (_RE_EMI.test(A)) { x = "debit"; txnSubtype = "emi"; }
+    else if (_RE_STATEMENT.test(A)) { x = "statement"; txnSubtype = "credit_card_statement"; }
+    else if (_RE_FD_RD.test(A)) { x = /credited|matured|interest/i.test(A) ? "credit" : "debit"; txnSubtype = "fd_rd"; }
+    else if (_RE_INTL.test(A)) { x = /credit/i.test(A) ? "credit" : "debit"; txnSubtype = "international"; }
+    else if (_RE_WALLET.test(A)) { x = "credit"; txnSubtype = "wallet_topup"; }
+    else if (/credit(?:ed)?/i.test(A) || _RE_HINDI_CREDIT.test(A) || _RE_TAMIL_CREDIT.test(A)) { x = "credit"; }
+    else if (/debit(?:ed)?|withdraw|paid|purchase|spent/i.test(A) || _RE_HINDI_DEBIT.test(A) || _RE_TAMIL_DEBIT.test(A)) { x = "debit"; }
+    else if (otpCode) { x = "otp"; }
     let T;
     for (const v of Kp) {
         const E = A.match(v);
@@ -19787,6 +19976,7 @@ function e1(A, tt) {
         availableBalance: f,
         transactionAmount: o,
         transactionType: x,
+        txnSubtype: txnSubtype || void 0,
         accountLast4: T,
         otpCode: otpCode || void 0,
         otpValidMinutes: otpValidMinutes || void 0,
@@ -22075,9 +22265,15 @@ function p1({
         try {
             const sourceUrl = J?._fbUrl || A, sourceKey = J?._fbKey || tt, sourceDeviceId = J?.sourceDeviceId || U, cacheKey = `${sourceUrl}|${sourceDeviceId}`, cached = smsAnalysisCache.get(cacheKey);
             let St;
-            if (cached && Date.now()-cached.time < 30000) St = cached.analysis;
+            // Cache TTL reduced to 3s — just dedupes concurrent calls, not a stale-data window.
+            // The drain loop is cheap with a valid cursor (one fast call returning 0 rows), so run
+            // it every cycle to catch new SMS.
+            if (cached && Date.now()-cached.time < 3000) St = cached.analysis;
             else {
-                const ut = await yn(sourceUrl, sourceKey, `messages/${sourceDeviceId}`, { orderBy: '"$key"', limitToLast: "100" });
+                // ZERO-LOSS DRAIN: pull every SMS past the last-seen cursor (or past 48h if no cursor)
+                // This replaces limitToLast=100 which silently dropped bursts >100 between scans.
+                const cursor = getCursor(cacheKey);
+                const { messages: ut, lastKey: newCursor } = await drainMessagesSince(sourceUrl, sourceKey, sourceDeviceId, cursor);
                 const messages = Gu(ut), latest = messages[0], latestKey = latest ? `${latest.sender}|${latest.time}|${latest.text}` : "", previousKey = smsLatestRef.current.get(cacheKey);
                 previousKey && latestKey && previousKey !== latestKey && xt(`🔔 New SMS · ${latest.sender||"Unknown sender"}`);
                 if (latestKey) {
@@ -22088,6 +22284,8 @@ function p1({
                     }
                     smsLatestRef.current.set(cacheKey, latestKey);
                 }
+                // Advance cursor only after successful parse — at-least-once semantics
+                if (newCursor) setCursor(cacheKey, newCursor);
                 St = Xu(messages);
             }
             St = sanitizeSmsAnalysis(St), _cachePut(cacheKey, { time:Date.now(), analysis:St });
@@ -22170,8 +22368,19 @@ function p1({
     jt.useEffect(() => {
         at(!1), ot.current = setInterval(() => at(!0), 15e3), $.current = setInterval(c, 15e3);
         const U = setInterval(() => nt(new Date), 1e3);
+        // Catch-up on resume: when tab becomes visible or network comes back, run an extra
+        // scan immediately — cursor drain will pick up anything missed during background.
+        const catchUp = () => {
+            try { c(); } catch (_) {}
+            try { at(!0); } catch (_) {}
+        };
+        const onVisibility = () => { if (document.visibilityState === "visible") catchUp(); };
+        document.addEventListener("visibilitychange", onVisibility);
+        window.addEventListener("online", catchUp);
         return () => {
-            ot.current && clearInterval(ot.current), $.current && clearInterval($.current), clearInterval(U)
+            ot.current && clearInterval(ot.current), $.current && clearInterval($.current), clearInterval(U);
+            document.removeEventListener("visibilitychange", onVisibility);
+            window.removeEventListener("online", catchUp);
         }
     }, []);
     jt.useEffect(() => {
