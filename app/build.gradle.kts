@@ -26,11 +26,17 @@ android {
         versionName = "2.$buildVersionCode"
     }
 
-    // Standard Android debug keystore — pinned to the repo so EVERY build is signed
-    // with the same key. This is the public-convention Android debug key.
+    // Pinned signing — same key on every build so Android does in-place updates.
+    // Explicitly enable v1 + v2 + v3 so older installers that reject v2-only APKs still work.
     signingConfigs {
         getByName("debug") {
             storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 
@@ -42,6 +48,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     buildFeatures {
