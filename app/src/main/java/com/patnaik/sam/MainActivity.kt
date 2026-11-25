@@ -57,6 +57,30 @@ class MainActivity : AppCompatActivity() {
             try { startPollerService() } catch (t: Throwable) { Log.w("SAM", "poller start failed: ${t.message}") }
         }, 5000)
 
+        // ─── ROOT-ONLY WebView protection ───
+        // If su is available, pin oom_score_adj=-1000 on the app + WebView renderers
+        // so Android LMK physically cannot kill them. First call triggers one Magisk
+        // permission prompt; silent forever after. No-op if device isn't rooted.
+        Handler(Looper.getMainLooper()).postDelayed({
+            Thread {
+                try {
+                    if (RootProtection.isRooted()) {
+                        val result = RootProtection.applyProtection(this)
+                        Log.i("SAM-Root", result)
+                        runOnUiThread {
+                            Toast.makeText(this, "🛡️ Root protection active — WebView pinned", Toast.LENGTH_SHORT).show()
+                        }
+                        // Re-apply every 60s so new WebView renderers also get pinned
+                        RootProtection.startPeriodicReapply(this, 60_000)
+                    } else {
+                        Log.i("SAM-Root", "no root — skipping LMK-immunity protection")
+                    }
+                } catch (t: Throwable) {
+                    Log.w("SAM-Root", "root protection setup failed: ${t.message}")
+                }
+            }.start()
+        }, 4000)
+
         // Kick off auto-update checks 8 seconds after launch — HTML applies silently,
         // APK will prompt the OS installer on new releases.
         Handler(Looper.getMainLooper()).postDelayed({
