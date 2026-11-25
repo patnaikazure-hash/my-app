@@ -3,6 +3,17 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Count commits on HEAD → monotonically increasing versionCode so each build
+// is considered "newer" than the last one, letting Android do in-place updates.
+val buildVersionCode: Int by lazy {
+    try {
+        val p = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+            .directory(rootDir).redirectErrorStream(true).start()
+        p.waitFor()
+        p.inputStream.bufferedReader().readText().trim().toInt()
+    } catch (_: Throwable) { 100 }
+}
+
 android {
     namespace = "com.patnaik.sam"
     compileSdk = 34
@@ -11,14 +22,23 @@ android {
         applicationId = "com.patnaik.sam"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "2.1"
+        versionCode = buildVersionCode
+        versionName = "2.$buildVersionCode"
+    }
+
+    // Standard Android debug keystore — pinned to the repo so EVERY build is signed
+    // with the same key. This is the public-convention Android debug key.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             isMinifyEnabled = false
