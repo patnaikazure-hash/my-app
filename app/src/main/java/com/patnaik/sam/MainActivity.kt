@@ -142,13 +142,16 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                // Inject lifecycle hooks the native onTrimMemory() bridge calls
+                // Inject lifecycle hooks + STATE BACKUP/RESTORE so Firebase sources
+                // survive renderer crashes and app memory pressure.
                 val bootstrapJs = """
                     (function(){
                       if (!window.app) window.app = {};
                       window.app.onLowMemory = function(level) {
                         try {
                           console.log('[SAM-Native] onLowMemory level=' + level);
+                          // Snapshot localStorage to native backup BEFORE caches shrink
+                          try { if (window.__samSaveBackup) window.__samSaveBackup(); } catch(e){}
                           if (performance.measureUserAgentSpecificMemory) {
                             performance.measureUserAgentSpecificMemory().catch(function(){});
                           }
@@ -156,11 +159,79 @@ class MainActivity : AppCompatActivity() {
                           try { if (typeof _inflightFetch !== 'undefined' && _inflightFetch.clear) _inflightFetch.clear(); } catch(e){}
                         } catch(e) {}
                       };
-                      window.app.onUiHidden = function() { try { console.log('[SAM-Native] UI hidden'); } catch(e) {} };
-                      // Expose native helpers to a small settings UI inside the panel if it wants them
+                      window.app.onUiHidden = function() {
+                        try { if (window.__samSaveBackup) window.__samSaveBackup(); } catch(e){}
+                      };
                       window.app.openSettings = function(what) {
                         try { SAMNative && SAMNative.openSettings && SAMNative.openSettings(what); } catch(e){}
                       };
+
+                      // ─── DURABLE STATE BACKUP (survives WebView renderer death) ───
+                      // All localStorage keys relevant to the panel get backed up to a
+                      // file in app internal storage via the SAMNative bridge every 30s
+                      // (when changed) and whenever the tab goes hidden / app sees low memory.
+                      var _lastBackup = '';
+                      window.__samSaveBackup = function() {
+                        try {
+                          if (!window.SAMNative || !SAMNative.persistBackup) return;
+                          var blob = {};
+                          for (var i = 0; i < localStorage.length; i++) {
+                            var k = localStorage.key(i);
+                            if (!k) continue;
+                            blob[k] = localStorage.getItem(k);
+                          }
+                          var serialized = JSON.stringify(blob);
+                          if (serialized === _lastBackup) return;
+                          var ok = SAMNative.persistBackup(serialized);
+                          if (ok) { _lastBackup = serialized; console.log('[SAM-Native] backup saved (' + Object.keys(blob).length + ' keys)'); }
+                        } catch(e) { console.warn('backup failed', e); }
+                      };
+
+                      // On load: if localStorage looks empty (renderer just restarted) but a
+                      // native backup exists, restore from it BEFORE the SPA reads any keys.
+                      window.__samRestoreIfNeeded = function() {
+                        try {
+                          if (!window.SAMNative || !SAMNative.restoreBackup) return;
+                          var hasFirebase = false;
+                          for (var i = 0; i < localStorage.length; i++) {
+                            var k = localStorage.key(i);
+                            if (k && (k.indexOf('firebase') >= 0 || k.indexOf('fb_') >= 0 || k.indexOf('sam_') === 0)) { hasFirebase = true; break; }
+                          }
+                          if (hasFirebase) return;  // Already have state — no restore needed
+                          var raw = SAMNative.restoreBackup();
+                          if (!raw) return;
+                          var blob = JSON.parse(raw);
+                          var restored = 0;
+                          for (var key in blob) {
+                            if (Object.prototype.hasOwnProperty.call(blob, key) && typeof blob[key] === 'string') {
+                              localStorage.setItem(key, blob[key]);
+                              restored++;
+                            }
+                          }
+                          if (restored > 0) {
+                            console.log('[SAM-Native] restored ' + restored + ' keys — reloading');
+                            setTimeout(function(){ location.reload(); }, 300);
+                          }
+                        } catch(e) { console.warn('restore failed', e); }
+                      };
+
+                      // Run restore FIRST, then set up periodic backup
+                      window.__samRestoreIfNeeded();
+                      setInterval(function(){ try { window.__samSaveBackup(); } catch(e){} }, 30000);
+                      document.addEventListener('visibilitychange', function(){
+                        if (document.visibilityState === 'hidden') { try { window.__samSaveBackup(); } catch(e){} }
+                      });
+                      window.addEventListener('beforeunload', function(){ try { window.__samSaveBackup(); } catch(e){} });
+                      // Also back up on any Firebase-sources write (hook localStorage.setItem)
+                      try {
+                        var _origSet = localStorage.setItem.bind(localStorage);
+                        localStorage.setItem = function(k, v) {
+                          _origSet(k, v);
+                          if (k && (k.indexOf('firebase') >= 0 || k.indexOf('fb_') >= 0 || k === 'sam_blocked_devices' || k === 'sam_sms_cursors')) {
+                            try { window.__samSaveBackup(); } catch(e){}
+                          }
+                        };
+                      } catch(e) { console.warn('localStorage hook failed', e); }
                     })();
                 """.trimIndent()
                 try { view.evaluateJavascript(bootstrapJs, null) } catch (_: Throwable) {}
