@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  System-level allowlist overlay for SAM Panel.
+  Lives at /system/etc/sysconfig/zz-sampanel.xml after Magisk mounts the module.
+  Loaded by SystemConfig at boot. Survives reboots and OTA (as long as Magisk re-mounts).
+
+  Purpose: mark SAM Panel as exempt from Doze, data-saver and location-saver
+  throttling at the FRAMEWORK level, not just per-session via cmd. This is what
+  AMS reads when it decides whether to freeze or kill a cached process.
+-->
+<config>
+    <allow-in-power-save package="com.patnaik.sam"/>
+    <allow-in-data-usage-save package="com.patnaik.sam"/>
+    <allow-unthrottled-location package="com.patnaik.sam"/>
+    <allow-ignore-location-settings package="com.patnaik.sam"/>
+</config>

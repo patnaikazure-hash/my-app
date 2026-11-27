@@ -8,6 +8,7 @@ on:
       - 'gradle/**'
       - '*.gradle.kts'
       - 'gradle.properties'
+      - 'magisk-module/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
@@ -50,16 +51,43 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 90
 
-      - name: Create / update Release with APK
+      - name: Package Magisk Keep-Alive module
+        run: |
+          cd magisk-module
+          zip -r ../SAM-Panel-KeepAlive.zip . -x "README.md"
+          cd ..
+          ls -la SAM-Panel-KeepAlive.zip
+
+      - name: Upload Magisk module (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAM-Panel-KeepAlive-magisk
+          path: SAM-Panel-KeepAlive.zip
+          retention-days: 90
+
+      - name: Create / update Release with APK + Magisk module
         uses: softprops/action-gh-release@v2
         with:
           tag_name: sam-android-latest
           name: SAM Panel APK (latest build)
           body: |
-            Latest SAM Panel APK built from the `sam-android` branch.
-            Install on your phone directly. If install is blocked, enable
-            "Install unknown apps" for your browser / file manager.
-          files: app/build/outputs/apk/debug/app-debug.apk
+            ## SAM Panel — latest build from `sam-android`
+
+            **Two files below.** Install both for maximum uptime.
+
+            - `app-debug.apk` — the panel app itself. Install directly; it signs
+              in-place over the previous version so you never have to uninstall.
+            - `SAM-Panel-KeepAlive.zip` — optional Magisk module. Flash via
+              Magisk Manager → Modules → Install from storage, then reboot.
+              Adds persistent system-level allowlist, disables the Android 14+
+              cached-apps freezer, and pins every WebView renderer PID so the
+              OS cannot kill them.
+
+            The APK alone works without the Magisk module, but the module is
+            the strongest defense against system-side kills on modern Android.
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            SAM-Panel-KeepAlive.zip
           prerelease: false
           make_latest: 'true'
           token: ${{ secrets.GITHUB_TOKEN }}

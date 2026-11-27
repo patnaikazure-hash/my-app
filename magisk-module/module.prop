@@ -1,0 +1,7 @@
+id=sampanel_keepalive
+name=SAM Panel Keep-Alive
+version=v2.0
+versionCode=20
+author=patnaikazure-hash
+description=Persistent power-save, freezer disable and renderer PID pinning for SAM Panel. Flash once via Magisk Manager -> Modules -> Install from storage, then reboot. Works together with the SAM Panel APK.
+updateJson=
