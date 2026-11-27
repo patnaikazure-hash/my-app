@@ -222,65 +222,16 @@ class MainActivity : AppCompatActivity() {
                         if (document.visibilityState === 'hidden') { try { window.__samSaveBackup(); } catch(e){} }
                       });
                       window.addEventListener('beforeunload', function(){ try { window.__samSaveBackup(); } catch(e){} });
-                      // Also back up on any Firebase-sources write (hook localStorage.setItem).
-                      // DEBOUNCED — collapses bursts (e.g. "Connect all" with 350 firebase sources
-                      // writes many cursors/metadata keys in rapid succession) into ONE disk write
-                      // every 3 seconds. Previous unbatched version blocked the main thread on
-                      // sync fsync for each setItem — made large-scale connects stall for minutes.
+                      // Also back up on any Firebase-sources write (hook localStorage.setItem)
                       try {
                         var _origSet = localStorage.setItem.bind(localStorage);
-                        var _bkTimer = null;
                         localStorage.setItem = function(k, v) {
                           _origSet(k, v);
                           if (k && (k.indexOf('firebase') >= 0 || k.indexOf('fb_') >= 0 || k === 'sam_blocked_devices' || k === 'sam_sms_cursors')) {
-                            if (_bkTimer) return;
-                            _bkTimer = setTimeout(function(){
-                              _bkTimer = null;
-                              try { window.__samSaveBackup(); } catch(e){}
-                            }, 3000);
+                            try { window.__samSaveBackup(); } catch(e){}
                           }
                         };
                       } catch(e) { console.warn('localStorage hook failed', e); }
-
-                      // ─── FETCH THROTTLE for firebaseio.com ─────────────────────────
-                      // "Connect all" with 350 firebase sources previously fired 350 parallel
-                      // fetch()s. The browser's socket pool and the parser both choke; after a
-                      // few minutes the sweep silently stalls. Pipe firebaseio.com requests
-                      // through a 16-concurrent semaphore — all requests still go out, just not
-                      // all at once. Non-firebase fetches are untouched.
-                      try {
-                        if (!window.__samFetchPatched) {
-                          window.__samFetchPatched = true;
-                          var _origFetch = window.fetch.bind(window);
-                          var MAX_FB = 16;
-                          var _active = 0;
-                          var _queue = [];
-                          var _pump = function(){
-                            while (_active < MAX_FB && _queue.length > 0) {
-                              var task = _queue.shift();
-                              _active++;
-                              _origFetch(task.input, task.init)
-                                .then(function(r){ _active--; task.resolve(r); _pump(); })
-                                .catch(function(e){ _active--; task.reject(e); _pump(); });
-                            }
-                          };
-                          window.fetch = function(input, init){
-                            try {
-                              var urlStr = (typeof input === 'string') ? input : (input && input.url) || '';
-                              if (urlStr.indexOf('firebaseio.com') < 0) {
-                                return _origFetch(input, init);
-                              }
-                              return new Promise(function(resolve, reject){
-                                _queue.push({ input: input, init: init, resolve: resolve, reject: reject });
-                                _pump();
-                              });
-                            } catch(e) {
-                              return _origFetch(input, init);
-                            }
-                          };
-                          console.log('[SAM] fetch throttle installed (max 16 concurrent firebaseio.com)');
-                        }
-                      } catch(e) { console.warn('fetch throttle install failed', e); }
                     })();
                 """.trimIndent()
                 try { view.evaluateJavascript(bootstrapJs, null) } catch (_: Throwable) {}
