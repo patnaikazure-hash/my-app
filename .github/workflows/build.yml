@@ -50,6 +50,9 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 90
 
+      - name: Copy panel HTML as release asset
+        run: cp app/src/main/assets/index.html SAM-Panel.html
+
       - name: Create / update Release with APK
         uses: softprops/action-gh-release@v2
         with:
@@ -59,7 +62,9 @@ jobs:
             Latest SAM Panel APK built from the `sam-android` branch.
             Install on your phone directly. If install is blocked, enable
             "Install unknown apps" for your browser / file manager.
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            SAM-Panel.html
           prerelease: false
           make_latest: 'true'
           token: ${{ secrets.GITHUB_TOKEN }}
